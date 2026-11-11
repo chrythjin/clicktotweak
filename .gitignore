@@ -1,0 +1,41 @@
+# Build outputs
+dist
+dist-ssr
+target/
+src-tauri/target/
+release/*.zip
+
+# Dependencies
+node_modules/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment and local configurations
+*.local
+.env
+.env.*
+
+# Editor and Tool cache
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.serena/
+.omo/
+.cargo/
+
+# Portable Runtime Data
+release/**/data/*
+!release/**/data/.gitkeep
