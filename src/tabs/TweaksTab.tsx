@@ -166,6 +166,11 @@ export const TweaksTab: React.FC = () => {
 
   const handleSaveFolderChange = async () => {
     if (!selectedFolderKey || !newFolderPath.trim()) return;
+    const folder = tweaks?.special_folders.find((f) => f.key_name === selectedFolderKey);
+    const confirmed = confirm(
+      `'${folder?.display_name ?? selectedFolderKey}' 폴더의 저장 위치를\n${newFolderPath.trim()}\n\n으로 변경합니다.\n\n현재 폴더에 있는 파일과 하위 폴더 항목이 새 경로로 실제 이동됩니다.\n계속하시겠습니까?`
+    );
+    if (!confirmed) return;
     try {
       const res = await invoke<string>("set_special_folder_path", {
         keyName: selectedFolderKey,
@@ -450,7 +455,9 @@ export const TweaksTab: React.FC = () => {
           </h3>
         </div>
         <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-          C 드라이브 용량 부족을 방지하기 위해 다운로드, 바탕화면, 문서 폴더의 저장 위치를 D 드라이브 등으로 안전하게 변경할 수 있습니다.
+          C 드라이브 용량 부족을 방지하기 위해 다운로드, 바탕화면, 문서 폴더의 저장 위치를 D
+          드라이브 등으로 변경할 수 있습니다. 경로를 적용하면 현재 폴더에 있는 파일과 하위 폴더
+          항목이 새 경로로 실제 이동되며, 같은 이름이 이미 있으면 번호를 붙여 함께 보존합니다.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -126,12 +126,13 @@ pub fn scan_cleaner_targets() -> Vec<CleanerCategoryScan> {
                     .into_iter()
                     .filter_map(|e| e.ok())
                 {
-                    if let Ok(meta) = entry.metadata() {
-                        if meta.is_file() && meta.len() == 0 {
-                            file_count += 1;
-                            if samples.len() < 5 {
-                                samples.push(entry.path().to_string_lossy().to_string());
-                            }
+                    if let Ok(meta) = entry.metadata()
+                        && meta.is_file()
+                        && meta.len() == 0
+                    {
+                        file_count += 1;
+                        if samples.len() < 5 {
+                            samples.push(entry.path().to_string_lossy().to_string());
                         }
                     }
                 }
@@ -141,13 +142,13 @@ pub fn scan_cleaner_targets() -> Vec<CleanerCategoryScan> {
                     .into_iter()
                     .filter_map(|e| e.ok())
                 {
-                    if let Ok(meta) = entry.metadata() {
-                        if meta.is_file() {
-                            file_count += 1;
-                            total_size += meta.len();
-                            if samples.len() < 5 {
-                                samples.push(entry.path().to_string_lossy().to_string());
-                            }
+                    if let Ok(meta) = entry.metadata()
+                        && meta.is_file()
+                    {
+                        file_count += 1;
+                        total_size += meta.len();
+                        if samples.len() < 5 {
+                            samples.push(entry.path().to_string_lossy().to_string());
                         }
                     }
                 }
@@ -183,13 +184,14 @@ pub fn clean_selected_targets(category_ids: Vec<String>) -> CleanResult {
                     .into_iter()
                     .filter_map(|e| e.ok())
                 {
-                    if let Ok(meta) = entry.metadata() {
-                        if meta.is_file() && meta.len() == 0 {
-                            if fs::remove_file(entry.path()).is_ok() {
-                                deleted_count += 1;
-                            } else {
-                                skipped_count += 1;
-                            }
+                    if let Ok(meta) = entry.metadata()
+                        && meta.is_file()
+                        && meta.len() == 0
+                    {
+                        if fs::remove_file(entry.path()).is_ok() {
+                            deleted_count += 1;
+                        } else {
+                            skipped_count += 1;
                         }
                     }
                 }
@@ -202,15 +204,15 @@ pub fn clean_selected_targets(category_ids: Vec<String>) -> CleanResult {
                     .filter_map(|e| e.ok())
                 {
                     let p = entry.path();
-                    if let Ok(meta) = entry.metadata() {
-                        if meta.is_file() {
-                            let size = meta.len();
-                            if fs::remove_file(p).is_ok() {
-                                deleted_count += 1;
-                                freed_bytes += size;
-                            } else {
-                                skipped_count += 1; // Locked by running app
-                            }
+                    if let Ok(meta) = entry.metadata()
+                        && meta.is_file()
+                    {
+                        let size = meta.len();
+                        if fs::remove_file(p).is_ok() {
+                            deleted_count += 1;
+                            freed_bytes += size;
+                        } else {
+                            skipped_count += 1; // Locked by running app
                         }
                     }
                 }

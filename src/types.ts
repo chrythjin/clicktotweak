@@ -78,6 +78,8 @@ export interface GuardTarget {
   name: string;
   enabled: boolean;
   last_snapshot?: string | null;
+  is_folder: boolean;
+  snapshot_capable: boolean;
 }
 
 export interface SnapshotInfo {
@@ -129,13 +131,12 @@ export interface DesktopLayoutSnapshot {
 }
 
 export interface DesktopSystemIcons {
-  this_pc: bool_alias;
-  user_files: bool_alias;
-  control_panel: bool_alias;
-  network: bool_alias;
-  recycle_bin: bool_alias;
+  this_pc: boolean;
+  user_files: boolean;
+  control_panel: boolean;
+  network: boolean;
+  recycle_bin: boolean;
 }
-type bool_alias = boolean;
 
 export interface InputResponseSettings {
   keyboard_delay: number;

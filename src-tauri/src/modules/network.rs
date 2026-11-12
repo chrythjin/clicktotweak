@@ -35,6 +35,12 @@ const AD_DOMAINS: &[&str] = &[
     "adtrue.com",
 ];
 
+fn is_adblock_active_at(path: &Path) -> bool {
+    fs::read_to_string(path)
+        .map(|content| content.contains(BLOCK_START_TAG))
+        .unwrap_or(false)
+}
+
 #[tauri::command(async)]
 pub fn get_network_summary() -> NetworkTrafficSummary {
     let mut networks = Networks::new_with_refreshed_list();
@@ -55,18 +61,18 @@ pub fn get_network_summary() -> NetworkTrafficSummary {
         }
     }
 
-    let is_adblock_active = if let Ok(content) = fs::read_to_string(HOSTS_FILE_PATH) {
-        content.contains(BLOCK_START_TAG)
-    } else {
-        false
-    };
+    let is_adblock_active = is_adblock_active_at(Path::new(HOSTS_FILE_PATH));
 
     NetworkTrafficSummary {
         total_rx_bytes_sec: total_rx,
         total_tx_bytes_sec: total_tx,
         active_interface_name: active_iface,
         is_adblock_active,
-        blocked_domains_count: if is_adblock_active { AD_DOMAINS.len() } else { 0 },
+        blocked_domains_count: if is_adblock_active {
+            AD_DOMAINS.len()
+        } else {
+            0
+        },
     }
 }
 
@@ -79,23 +85,21 @@ fn strip_adblock_block(original: &[u8]) -> Vec<u8> {
 
     while i < original.len() {
         let is_start = original[i..].starts_with(start);
-        if is_start {
-            if let Some(rel_end) = find_subslice(&original[i..], end) {
-                let block_end = i + rel_end + end.len();
-                let mut cut_end = block_end;
-                if original[block_end..].starts_with(b"\r\n") {
-                    cut_end += 2;
-                } else if original[block_end..].starts_with(b"\n") {
-                    cut_end += 1;
-                }
-                if result.ends_with(b"\r\n\r\n") {
-                    result.truncate(result.len() - 2);
-                } else if result.ends_with(b"\n\n") {
-                    result.truncate(result.len() - 1);
-                }
-                i = cut_end;
-                continue;
+        if is_start && let Some(rel_end) = find_subslice(&original[i..], end) {
+            let block_end = i + rel_end + end.len();
+            let mut cut_end = block_end;
+            if original[block_end..].starts_with(b"\r\n") {
+                cut_end += 2;
+            } else if original[block_end..].starts_with(b"\n") {
+                cut_end += 1;
             }
+            if result.ends_with(b"\r\n\r\n") {
+                result.truncate(result.len() - 2);
+            } else if result.ends_with(b"\n\n") {
+                result.truncate(result.len() - 1);
+            }
+            i = cut_end;
+            continue;
         }
         result.push(original[i]);
         i += 1;
@@ -119,17 +123,32 @@ fn write_hosts_atomically(path: &Path, content: &[u8]) -> Result<(), String> {
         .parent()
         .ok_or_else(|| "hosts 파일 경로가 올바르지 않습니다.".to_string())?;
     let original = fs::read(path).map_err(|e| format!("hosts 원본 읽기 실패: {}", e))?;
-    let stamp = format!("{}_{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().ok_or("시간 조회 실패")?);
+    let stamp = format!(
+        "{}_{}",
+        std::process::id(),
+        chrono::Utc::now()
+            .timestamp_nanos_opt()
+            .ok_or("시간 조회 실패")?
+    );
     let backup_path = dir.join(format!("hosts.clicktotweak.backup.{}", stamp));
     let tmp_path = dir.join(format!("hosts.clicktotweak.{}.tmp", stamp));
-    let mut backup = fs::OpenOptions::new().write(true).create_new(true).open(&backup_path)
+    let mut backup = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&backup_path)
         .map_err(|e| format!("hosts 백업 생성 실패: {}", e))?;
-    backup.write_all(&original).and_then(|_| backup.sync_all())
+    backup
+        .write_all(&original)
+        .and_then(|_| backup.sync_all())
         .map_err(|e| format!("hosts 백업 저장 실패 ({}): {}", backup_path.display(), e))?;
     let result = (|| -> Result<(), String> {
-        let mut tmp = fs::OpenOptions::new().write(true).create_new(true).open(&tmp_path)
+        let mut tmp = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
             .map_err(|e| format!("hosts 임시 파일 생성 실패: {}", e))?;
-        tmp.write_all(content).and_then(|_| tmp.sync_all())
+        tmp.write_all(content)
+            .and_then(|_| tmp.sync_all())
             .map_err(|e| format!("hosts 임시 파일 저장 실패: {}", e))?;
         drop(tmp);
         if fs::read(path).map_err(|e| format!("hosts 재확인 실패: {}", e))? != original {
@@ -140,7 +159,8 @@ fn write_hosts_atomically(path: &Path, content: &[u8]) -> Result<(), String> {
     })();
     if let Err(error) = result {
         if tmp_path.exists() {
-            fs::remove_file(&tmp_path).map_err(|cleanup| format!("{}; 임시 파일 정리 실패: {}", error, cleanup))?;
+            fs::remove_file(&tmp_path)
+                .map_err(|cleanup| format!("{}; 임시 파일 정리 실패: {}", error, cleanup))?;
         }
         return Err(format!("{} (백업: {})", error, backup_path.display()));
     }
@@ -149,14 +169,16 @@ fn write_hosts_atomically(path: &Path, content: &[u8]) -> Result<(), String> {
 
 #[tauri::command]
 pub fn toggle_adblock(enable: bool) -> Result<String, String> {
-    let p = Path::new(HOSTS_FILE_PATH);
-    if !p.exists() {
+    toggle_adblock_at(Path::new(HOSTS_FILE_PATH), enable)
+}
+
+fn toggle_adblock_at(path: &Path, enable: bool) -> Result<String, String> {
+    if !path.exists() {
         return Err("hosts 파일을 찾을 수 없습니다.".to_string());
     }
 
-    let original = fs::read(p).map_err(|e| {
-        format!("hosts 파일을 읽을 수 없습니다 (관리자 권한 필요): {}", e)
-    })?;
+    let original = fs::read(path)
+        .map_err(|e| format!("hosts 파일을 읽을 수 없습니다 (관리자 권한 필요): {}", e))?;
 
     let mut new_content = strip_adblock_block(&original);
 
@@ -174,7 +196,7 @@ pub fn toggle_adblock(enable: bool) -> Result<String, String> {
         new_content.extend_from_slice(b"\r\n");
     }
 
-    write_hosts_atomically(p, &new_content)?;
+    write_hosts_atomically(path, &new_content)?;
 
     Ok(if enable {
         format!(
@@ -210,17 +232,31 @@ mod tests {
         let original = b"127.0.0.1 localhost\r\n# user comment\r\n\r\n# === BEGIN CLICKTOTWEAK MODERN AD BLOCK ===\r\n0.0.0.0 ad.daum.net\r\n# === END CLICKTOTWEAK MODERN AD BLOCK ===\r\n192.168.0.1 router\r\n";
         let result = strip_adblock_block(original);
 
-        assert!(!result.windows(BLOCK_START_TAG.len()).any(|w| w == BLOCK_START_TAG.as_bytes()));
-        assert!(!result.windows(BLOCK_END_TAG.len()).any(|w| w == BLOCK_END_TAG.as_bytes()));
-        assert!(result
-            .windows("127.0.0.1 localhost".len())
-            .any(|w| w == b"127.0.0.1 localhost"));
-        assert!(result
-            .windows("# user comment".len())
-            .any(|w| w == b"# user comment"));
-        assert!(result
-            .windows("192.168.0.1 router".len())
-            .any(|w| w == b"192.168.0.1 router"));
+        assert!(
+            !result
+                .windows(BLOCK_START_TAG.len())
+                .any(|w| w == BLOCK_START_TAG.as_bytes())
+        );
+        assert!(
+            !result
+                .windows(BLOCK_END_TAG.len())
+                .any(|w| w == BLOCK_END_TAG.as_bytes())
+        );
+        assert!(
+            result
+                .windows("127.0.0.1 localhost".len())
+                .any(|w| w == b"127.0.0.1 localhost")
+        );
+        assert!(
+            result
+                .windows("# user comment".len())
+                .any(|w| w == b"# user comment")
+        );
+        assert!(
+            result
+                .windows("192.168.0.1 router".len())
+                .any(|w| w == b"192.168.0.1 router")
+        );
     }
 
     #[test]
@@ -232,9 +268,15 @@ mod tests {
 
     #[test]
     fn strip_multiple_blocks_preserves_intervening_data() {
-        let block = format!("{}\n0.0.0.0 example.test\n{}\n", BLOCK_START_TAG, BLOCK_END_TAG);
+        let block = format!(
+            "{}\n0.0.0.0 example.test\n{}\n",
+            BLOCK_START_TAG, BLOCK_END_TAG
+        );
         let input = format!("first\n{}middle\n{}last\n", block, block);
-        assert_eq!(strip_adblock_block(input.as_bytes()), b"first\nmiddle\nlast\n");
+        assert_eq!(
+            strip_adblock_block(input.as_bytes()),
+            b"first\nmiddle\nlast\n"
+        );
     }
 
     #[test]
@@ -253,7 +295,11 @@ mod tests {
 
     #[test]
     fn atomic_write_creates_backup_and_replaces_content() {
-        let dir = std::env::temp_dir().join(format!("ctt_hosts_atomic_test_{}_{}", std::process::id(), chrono::Utc::now().timestamp_nanos_opt().unwrap()));
+        let dir = std::env::temp_dir().join(format!(
+            "ctt_hosts_atomic_test_{}_{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
         fs::create_dir(&dir).unwrap();
         let hosts = dir.join("hosts");
         fs::write(&hosts, b"original\n").unwrap();
@@ -264,11 +310,113 @@ mod tests {
         let backups: Vec<_> = fs::read_dir(&dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().starts_with("hosts.clicktotweak.backup."))
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("hosts.clicktotweak.backup.")
+            })
             .collect();
         assert_eq!(backups.len(), 1);
         assert_eq!(fs::read(backups[0].path()).unwrap(), b"original\n");
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    fn hosts_fixture(name: &str, content: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "ctt_hosts_{}_{}_{}",
+            name,
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let hosts = dir.join("hosts");
+        fs::write(&hosts, content).unwrap();
+        hosts
+    }
+
+    #[test]
+    fn toggle_enable_writes_block_and_keeps_existing_entries() {
+        let hosts = hosts_fixture("enable", b"127.0.0.1 localhost\r\n192.168.0.1 router\r\n");
+
+        toggle_adblock_at(&hosts, true).unwrap();
+
+        let content = fs::read_to_string(&hosts).unwrap();
+        assert!(content.contains(BLOCK_START_TAG));
+        assert!(content.contains(BLOCK_END_TAG));
+        assert!(content.contains("127.0.0.1 localhost"));
+        assert!(content.contains("192.168.0.1 router"));
+        for domain in AD_DOMAINS {
+            assert!(
+                content.contains(&format!("0.0.0.0 {}", domain)),
+                "missing {}",
+                domain
+            );
+        }
+        assert!(is_adblock_active_at(&hosts));
+
+        fs::remove_dir_all(hosts.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn toggle_disable_removes_block_and_restores_original_content() {
+        let original = b"127.0.0.1 localhost\r\n192.168.0.1 router\r\n";
+        let hosts = hosts_fixture("disable", original);
+
+        toggle_adblock_at(&hosts, true).unwrap();
+        toggle_adblock_at(&hosts, false).unwrap();
+
+        let content = fs::read_to_string(&hosts).unwrap();
+        assert!(!content.contains(BLOCK_START_TAG));
+        assert!(!content.contains(BLOCK_END_TAG));
+        assert!(!is_adblock_active_at(&hosts));
+        assert!(content.contains("127.0.0.1 localhost"));
+        assert!(content.contains("192.168.0.1 router"));
+
+        fs::remove_dir_all(hosts.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn toggle_enable_twice_does_not_duplicate_block() {
+        let hosts = hosts_fixture("idempotent", b"127.0.0.1 localhost\r\n");
+
+        toggle_adblock_at(&hosts, true).unwrap();
+        toggle_adblock_at(&hosts, true).unwrap();
+
+        let content = fs::read_to_string(&hosts).unwrap();
+        assert_eq!(content.matches(BLOCK_START_TAG).count(), 1);
+        assert_eq!(content.matches(BLOCK_END_TAG).count(), 1);
+
+        fs::remove_dir_all(hosts.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn toggle_on_missing_file_returns_error() {
+        let missing = std::env::temp_dir().join("ctt_hosts_absent_file_should_not_exist.txt");
+        assert!(toggle_adblock_at(&missing, true).is_err());
+    }
+
+    #[test]
+    fn toggle_leaves_backup_of_previous_state() {
+        let hosts = hosts_fixture("backup", b"127.0.0.1 localhost\r\n");
+
+        toggle_adblock_at(&hosts, true).unwrap();
+
+        let backups: Vec<_> = fs::read_dir(hosts.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("hosts.clicktotweak.backup.")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            fs::read(backups[0].path()).unwrap(),
+            b"127.0.0.1 localhost\r\n"
+        );
+
+        fs::remove_dir_all(hosts.parent().unwrap()).unwrap();
     }
 }

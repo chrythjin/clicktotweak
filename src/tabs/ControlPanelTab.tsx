@@ -177,9 +177,9 @@ export const ControlPanelTab: React.FC = () => {
       return;
     }
     try {
-      const res = await invoke<string>("schedule_auto_shutdown", {
+      const res = await invoke<string>("schedule_shutdown", {
+        seconds: mins * 60,
         action: shutdownAction,
-        minutes: mins,
       });
       setShutdownScheduled(`${mins}분 후 ${shutdownAction === "shutdown" ? "종료" : shutdownAction === "restart" ? "다시 시작" : "최대 절전"}`);
       notify(res, false);
@@ -191,7 +191,7 @@ export const ControlPanelTab: React.FC = () => {
   // 9. 예약 종료 취소
   const handleCancelShutdown = async () => {
     try {
-      const res = await invoke<string>("cancel_auto_shutdown");
+      const res = await invoke<string>("cancel_shutdown");
       setShutdownScheduled(null);
       notify(res, false);
     } catch (e: any) {

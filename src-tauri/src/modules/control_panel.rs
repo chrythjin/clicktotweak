@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::process::Command;
-use winreg::enums::*;
 use winreg::RegKey;
+use winreg::enums::*;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DesktopSystemIcons {
@@ -52,7 +52,7 @@ const CLSID_RECYCLE_BIN: &str = "{645FF040-5081-101B-9F08-00AA002F954E}";
 fn notify_shell_change() {
     #[cfg(windows)]
     unsafe {
-        use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+        use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
         SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
     }
 }
@@ -66,11 +66,11 @@ pub fn get_desktop_system_icons() -> Result<DesktopSystemIcons, String> {
     let key = hkcu.open_subkey(DESKTOP_ICON_KEY).ok();
 
     let is_shown = |clsid: &str, default_shown: bool| -> bool {
-        if let Some(ref k) = key {
-            if let Ok(val) = k.get_value::<u32, _>(clsid) {
-                // 0 = 표시, 1 = 숨김
-                return val == 0;
-            }
+        if let Some(ref k) = key
+            && let Ok(val) = k.get_value::<u32, _>(clsid)
+        {
+            // 0 = 표시, 1 = 숨김
+            return val == 0;
         }
         default_shown
     };
@@ -107,7 +107,10 @@ pub fn set_desktop_system_icon(icon_type: String, show: bool) -> Result<String, 
 
     notify_shell_change();
     let state_str = if show { "표시" } else { "숨김" };
-    Ok(format!("바탕화면 시스템 아이콘이 '{}' 상태로 변경되었습니다.", state_str))
+    Ok(format!(
+        "바탕화면 시스템 아이콘이 '{}' 상태로 변경되었습니다.",
+        state_str
+    ))
 }
 
 // ==========================================
@@ -158,33 +161,69 @@ pub fn get_input_response_settings() -> Result<InputResponseSettings, String> {
 #[tauri::command]
 pub fn set_input_response_settings(settings: InputResponseSettings) -> Result<String, String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let mut failures: Vec<String> = Vec::new();
 
-    // Keyboard Delay & Speed
-    if let Ok((kb_key, _)) = hkcu.create_subkey(r"Control Panel\Keyboard") {
-        let _ = kb_key.set_value("KeyboardDelay", &settings.keyboard_delay.to_string());
-        let _ = kb_key.set_value("KeyboardSpeed", &settings.keyboard_speed.to_string());
-    }
+    let mut write_value =
+        |key_path: &str, value_name: &str, value: &str| match hkcu.create_subkey(key_path) {
+            Ok((key, _)) => {
+                if let Err(e) = key.set_value(value_name, &value.to_string()) {
+                    failures.push(format!("{}/{}: {}", key_path, value_name, e));
+                }
+            }
+            Err(e) => failures.push(format!("{}: {}", key_path, e)),
+        };
 
-    // MenuShowDelay
-    if let Ok((desk_key, _)) = hkcu.create_subkey(r"Control Panel\Desktop") {
-        let _ = desk_key.set_value("MenuShowDelay", &settings.menu_show_delay.to_string());
-    }
+    write_value(
+        r"Control Panel\Keyboard",
+        "KeyboardDelay",
+        &settings.keyboard_delay.to_string(),
+    );
+    write_value(
+        r"Control Panel\Keyboard",
+        "KeyboardSpeed",
+        &settings.keyboard_speed.to_string(),
+    );
+    write_value(
+        r"Control Panel\Desktop",
+        "MenuShowDelay",
+        &settings.menu_show_delay.to_string(),
+    );
 
-    // Mouse Acceleration
-    if let Ok((mouse_key, _)) = hkcu.create_subkey(r"Control Panel\Mouse") {
-        let mouse_speed = if settings.mouse_speed_acceleration { "1" } else { "0" };
-        let mouse_thresh = if settings.mouse_speed_acceleration { "6" } else { "0" };
-        let _ = mouse_key.set_value("MouseSpeed", &mouse_speed);
-        let _ = mouse_key.set_value("MouseThreshold1", &mouse_thresh);
-        let _ = mouse_key.set_value("MouseThreshold2", &if settings.mouse_speed_acceleration { "10" } else { "0" });
+    let mouse_speed = if settings.mouse_speed_acceleration {
+        "1"
+    } else {
+        "0"
+    };
+    let mouse_thresh = if settings.mouse_speed_acceleration {
+        "6"
+    } else {
+        "0"
+    };
+    write_value(r"Control Panel\Mouse", "MouseSpeed", mouse_speed);
+    write_value(r"Control Panel\Mouse", "MouseThreshold1", mouse_thresh);
+    write_value(
+        r"Control Panel\Mouse",
+        "MouseThreshold2",
+        if settings.mouse_speed_acceleration {
+            "10"
+        } else {
+            "0"
+        },
+    );
+
+    if !failures.is_empty() {
+        return Err(format!(
+            "일부 설정을 저장하지 못했습니다: {}",
+            failures.join(", ")
+        ));
     }
 
     // SystemParametersInfoW notify
     #[cfg(windows)]
     unsafe {
         use windows::Win32::UI::WindowsAndMessaging::{
-            SystemParametersInfoW, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE, SPI_SETKEYBOARDDELAY,
-            SPI_SETKEYBOARDSPEED,
+            SPI_SETKEYBOARDDELAY, SPI_SETKEYBOARDSPEED, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE,
+            SystemParametersInfoW,
         };
         let _ = SystemParametersInfoW(
             SPI_SETKEYBOARDDELAY,
@@ -206,20 +245,32 @@ pub fn set_input_response_settings(settings: InputResponseSettings) -> Result<St
 // ==========================================
 // 3. 전원 및 시스템 드라이브 용량 제어판
 // ==========================================
+const ULTIMATE_PERFORMANCE_GUID: &str = "e9a42b02-d5df-448d-aa00-03f14749eb61";
+
+fn is_ultimate_performance_available(hklm: &RegKey) -> bool {
+    hklm.open_subkey(format!(
+        r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes\{}",
+        ULTIMATE_PERFORMANCE_GUID
+    ))
+    .is_ok()
+}
+
 #[tauri::command]
 pub fn get_system_power_settings() -> Result<SystemPowerSettings, String> {
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let hibernate_enabled = if let Ok(power_key) =
-        hklm.open_subkey(r"SYSTEM\CurrentControlSet\Control\Power")
-    {
-        power_key.get_value::<u32, _>("HibernateEnabled").unwrap_or(0) == 1
-    } else {
-        false
-    };
+    let hibernate_enabled =
+        if let Ok(power_key) = hklm.open_subkey(r"SYSTEM\CurrentControlSet\Control\Power") {
+            power_key
+                .get_value::<u32, _>("HibernateEnabled")
+                .unwrap_or(0)
+                == 1
+        } else {
+            false
+        };
 
     Ok(SystemPowerSettings {
         hibernate_enabled,
-        ultimate_performance_unlocked: true,
+        ultimate_performance_unlocked: is_ultimate_performance_available(&hklm),
     })
 }
 
@@ -233,7 +284,10 @@ pub fn set_hibernate_enabled(enable: bool) -> Result<String, String> {
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("최대 절전 모드 변경 실패 (관리자 권한 필요): {}", err));
+        return Err(format!(
+            "최대 절전 모드 변경 실패 (관리자 권한 필요): {}",
+            err
+        ));
     }
 
     let msg = if enable {
@@ -248,15 +302,15 @@ pub fn set_hibernate_enabled(enable: bool) -> Result<String, String> {
 pub fn unlock_ultimate_performance() -> Result<String, String> {
     // Ultimate Performance GUID
     let output = Command::new("powercfg")
-        .args(&[
-            "-duplicatescheme",
-            "e9a42b02-d5df-448d-aa00-03f14749eb61",
-        ])
+        .args(["-duplicatescheme", "e9a42b02-d5df-448d-aa00-03f14749eb61"])
         .output()
         .map_err(|e| format!("powercfg 실행 실패: {}", e))?;
 
     if output.status.success() {
-        Ok("Windows '최고의 성능(Ultimate Performance)' 전원 계획이 잠금 해제되었습니다.".to_string())
+        Ok(
+            "Windows '최고의 성능(Ultimate Performance)' 전원 계획이 잠금 해제되었습니다."
+                .to_string(),
+        )
     } else {
         Err("전원 계획 생성 실패 (관리자 권한이 필요합니다).".to_string())
     }
@@ -426,7 +480,11 @@ pub fn set_advanced_win11_tweak(key: String, enable: bool) -> Result<String, Str
             let val: u32 = if enable { 1 } else { 0 };
             k.set_value("TaskbarAl", &val).map_err(|e| e.to_string())?;
             notify_shell_change();
-            let state = if enable { "가운데 정렬" } else { "왼쪽 정렬" };
+            let state = if enable {
+                "가운데 정렬"
+            } else {
+                "왼쪽 정렬"
+            };
             Ok(format!("작업 표시줄이 '{}' 상태로 변경되었습니다.", state))
         }
         "disable_bing_search" => {
@@ -434,17 +492,28 @@ pub fn set_advanced_win11_tweak(key: String, enable: bool) -> Result<String, Str
                 .create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Search")
                 .map_err(|e| e.to_string())?;
             let val_bing: u32 = if enable { 0 } else { 1 };
-            search_k.set_value("BingSearchEnabled", &val_bing).map_err(|e| e.to_string())?;
+            search_k
+                .set_value("BingSearchEnabled", &val_bing)
+                .map_err(|e| e.to_string())?;
 
             let (policy_k, _) = hkcu
                 .create_subkey(r"Software\Policies\Microsoft\Windows\Explorer")
                 .map_err(|e| e.to_string())?;
             let val_sugg: u32 = if enable { 1 } else { 0 };
-            policy_k.set_value("DisableSearchBoxSuggestions", &val_sugg).map_err(|e| e.to_string())?;
+            policy_k
+                .set_value("DisableSearchBoxSuggestions", &val_sugg)
+                .map_err(|e| e.to_string())?;
 
             notify_shell_change();
-            let state = if enable { "차단됨 (로컬 검색만 수행)" } else { "기본값 복원" };
-            Ok(format!("시작 메뉴 Bing 웹 검색 결과가 '{}' 상태로 변경되었습니다.", state))
+            let state = if enable {
+                "차단됨 (로컬 검색만 수행)"
+            } else {
+                "기본값 복원"
+            };
+            Ok(format!(
+                "시작 메뉴 Bing 웹 검색 결과가 '{}' 상태로 변경되었습니다.",
+                state
+            ))
         }
         "prevent_auto_reboot" => {
             let (k, _) = hklm
@@ -453,27 +522,45 @@ pub fn set_advanced_win11_tweak(key: String, enable: bool) -> Result<String, Str
             let val: u32 = if enable { 1 } else { 0 };
             k.set_value("NoAutoRebootWithLoggedOnUsers", &val)
                 .map_err(|e| format!("설정 저장 실패 (관리자 권한 필요): {}", e))?;
-            let state = if enable { "활성화 (자동 재부팅 방지)" } else { "기본값 복원" };
-            Ok(format!("Windows 업데이트 후 자동 재부팅 방지 정책이 '{}'되었습니다.", state))
+            let state = if enable {
+                "활성화 (자동 재부팅 방지)"
+            } else {
+                "기본값 복원"
+            };
+            Ok(format!(
+                "Windows 업데이트 후 자동 재부팅 방지 정책이 '{}'되었습니다.",
+                state
+            ))
         }
         "take_ownership_menu" => {
             if enable {
                 let (runas, _) = hkcr
                     .create_subkey(r"*\shell\runas")
                     .map_err(|e| format!("키 생성 실패 (관리자 권한 필요): {}", e))?;
-                runas.set_value("", &"파일 소유권 가져오기 (Take Ownership)").map_err(|e| e.to_string())?;
-                runas.set_value("NoWorkingDirectory", &"").map_err(|e| e.to_string())?;
+                runas
+                    .set_value("", &"파일 소유권 가져오기 (Take Ownership)")
+                    .map_err(|e| e.to_string())?;
+                runas
+                    .set_value("NoWorkingDirectory", &"")
+                    .map_err(|e| e.to_string())?;
 
                 let (cmd, _) = runas.create_subkey("command").map_err(|e| e.to_string())?;
-                let cmd_str = r#"cmd.exe /c takeown /f "%1" && icacls "%1" /grant administrators:F"#;
+                let cmd_str =
+                    r#"cmd.exe /c takeown /f "%1" && icacls "%1" /grant administrators:F"#;
                 cmd.set_value("", &cmd_str).map_err(|e| e.to_string())?;
-                cmd.set_value("IsolatedCommand", &cmd_str).map_err(|e| e.to_string())?;
+                cmd.set_value("IsolatedCommand", &cmd_str)
+                    .map_err(|e| e.to_string())?;
 
                 notify_shell_change();
                 Ok("우클릭 메뉴에 '파일 소유권 가져오기'가 등록되었습니다.".to_string())
             } else {
-                if let Ok(shell) = hkcr.open_subkey_with_flags(r"*\shell", KEY_WRITE) {
-                    let _ = shell.delete_subkey_all("runas");
+                let shell = hkcr
+                    .open_subkey_with_flags(r"*\shell", KEY_WRITE)
+                    .map_err(|e| format!("키 열기 실패 (관리자 권한 필요): {}", e))?;
+                match shell.delete_subkey_all("runas") {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(format!("우클릭 메뉴 항목 제거 실패: {}", e)),
                 }
                 notify_shell_change();
                 Ok("우클릭 메뉴에서 '파일 소유권 가져오기'가 제거되었습니다.".to_string())
@@ -482,5 +569,3 @@ pub fn set_advanced_win11_tweak(key: String, enable: bool) -> Result<String, Str
         _ => Err("알 수 없는 트윅 키입니다.".to_string()),
     }
 }
-
-

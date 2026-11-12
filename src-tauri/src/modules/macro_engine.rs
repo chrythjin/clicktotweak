@@ -39,16 +39,14 @@ pub fn get_sample_macros() -> Vec<MacroPreset> {
             id: "auto_clicker".to_string(),
             name: "초고속 자동 클릭 (Auto Clicker)".to_string(),
             description: "현재 마우스 위치에서 50ms 간격으로 좌클릭 10회 반복".to_string(),
-            actions: vec![
-                MacroAction {
-                    action_type: "click".to_string(),
-                    x: 0,
-                    y: 0,
-                    button: Some("left".to_string()),
-                    key: None,
-                    delay_ms: 50,
-                },
-            ],
+            actions: vec![MacroAction {
+                action_type: "click".to_string(),
+                x: 0,
+                y: 0,
+                button: Some("left".to_string()),
+                key: None,
+                delay_ms: 50,
+            }],
             repeat_count: 10,
         },
         MacroPreset {
@@ -86,9 +84,20 @@ pub fn get_sample_macros() -> Vec<MacroPreset> {
     ]
 }
 
+struct PlayingGuard;
+
+impl Drop for PlayingGuard {
+    fn drop(&mut self) {
+        IS_PLAYING.store(false, Ordering::SeqCst);
+    }
+}
+
 #[tauri::command]
 pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String, String> {
-    if IS_PLAYING.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_err() {
+    if IS_PLAYING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
         return Err("이미 다른 매크로가 실행 중입니다.".to_string());
     }
 
@@ -96,6 +105,7 @@ pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String
     FAILED_INPUTS.store(0, Ordering::SeqCst);
 
     thread::spawn(move || {
+        let _guard = PlayingGuard;
         let count = if repeat_count == 0 { 1 } else { repeat_count };
         let mut failed_inputs = 0usize;
 
@@ -124,9 +134,9 @@ pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String
                         #[cfg(windows)]
                         unsafe {
                             use windows::Win32::UI::Input::KeyboardAndMouse::{
-                                SendInput, INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN,
+                                INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN,
                                 MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-                                MOUSEINPUT,
+                                MOUSEINPUT, SendInput,
                             };
 
                             let btn = action.button.as_deref().unwrap_or("left");
@@ -174,10 +184,9 @@ pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String
                         #[cfg(windows)]
                         unsafe {
                             use windows::Win32::UI::Input::KeyboardAndMouse::{
-                                SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT,
-                                KEYEVENTF_KEYUP, KEYEVENTF_EXTENDEDKEY, VIRTUAL_KEY, VK_F5,
-                                VK_RETURN, VK_SPACE, VK_TAB, VK_ESCAPE, VK_LEFT, VK_RIGHT, VK_UP,
-                                VK_DOWN,
+                                INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
+                                KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY, VK_DOWN, VK_ESCAPE, VK_F5,
+                                VK_LEFT, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
                             };
 
                             let vk = match action.key.as_deref() {
@@ -196,10 +205,7 @@ pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String
                             if vk.0 != 0 {
                                 let is_extended = matches!(
                                     action.key.as_deref(),
-                                    Some("Left")
-                                        | Some("Right")
-                                        | Some("Up")
-                                        | Some("Down")
+                                    Some("Left") | Some("Right") | Some("Up") | Some("Down")
                                 );
                                 let base_flags = if is_extended {
                                     KEYEVENTF_EXTENDEDKEY
@@ -251,7 +257,6 @@ pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String
         }
 
         FAILED_INPUTS.store(failed_inputs, Ordering::SeqCst);
-        IS_PLAYING.store(false, Ordering::SeqCst);
     });
 
     Ok("매크로 실행을 시작했습니다.".to_string())
@@ -261,11 +266,6 @@ pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String
 pub fn stop_macro() -> Result<String, String> {
     STOP_REQUESTED.store(true, Ordering::SeqCst);
     Ok("매크로 중지를 요청했습니다.".to_string())
-}
-
-#[tauri::command]
-pub fn is_macro_running() -> bool {
-    IS_PLAYING.load(Ordering::SeqCst)
 }
 
 #[tauri::command]

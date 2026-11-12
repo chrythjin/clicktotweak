@@ -6,6 +6,7 @@ use modules::backup_manager::*;
 use modules::cleaner::*;
 use modules::control_panel::*;
 use modules::desktop_icons::*;
+use modules::elevation::*;
 use modules::file_shredder::*;
 use modules::macro_engine::*;
 use modules::network::*;
@@ -18,7 +19,6 @@ use modules::window_tool::*;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             // System
             get_system_summary,
@@ -71,7 +71,6 @@ pub fn run() {
             get_sample_macros,
             play_macro,
             stop_macro,
-            is_macro_running,
             get_macro_status,
             // Restore Points
             create_restore_point,
@@ -98,6 +97,9 @@ pub fn run() {
             // Auto Shutdown
             schedule_shutdown,
             cancel_shutdown,
+            // Elevation
+            get_elevation_status,
+            relaunch_as_admin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

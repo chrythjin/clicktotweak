@@ -1,7 +1,7 @@
 use crate::modules::shell_tweaks::{
-    get_shell_tweaks_state, set_hide_shortcut_arrow, set_show_drive_letters_first,
-    set_show_file_extensions, set_show_hidden_files, set_special_folder_path,
-    set_taskbar_search_mode, set_win11_classic_menu, ShellTweaksState,
+    ShellTweaksState, apply_special_folder_path, get_shell_tweaks_state, set_hide_shortcut_arrow,
+    set_show_drive_letters_first, set_show_file_extensions, set_show_hidden_files,
+    set_taskbar_search_mode, set_win11_classic_menu,
 };
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,9 @@ pub struct RestorePoint {
 
 fn get_restore_dir() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let p = PathBuf::from(local).join("ClickToTweakModern").join("RestorePoints");
+        let p = PathBuf::from(local)
+            .join("ClickToTweakModern")
+            .join("RestorePoints");
         let _ = fs::create_dir_all(&p);
         p
     } else {
@@ -60,12 +62,11 @@ pub fn get_restore_points() -> Vec<RestorePoint> {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
-            if path.extension().and_then(|s| s.to_str()) == Some("json") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(rp) = serde_json::from_str::<RestorePoint>(&content) {
-                        list.push(rp);
-                    }
-                }
+            if path.extension().and_then(|s| s.to_str()) == Some("json")
+                && let Ok(content) = fs::read_to_string(&path)
+                && let Ok(rp) = serde_json::from_str::<RestorePoint>(&content)
+            {
+                list.push(rp);
             }
         }
     }
@@ -120,7 +121,7 @@ pub fn restore_from_point(id: String) -> Result<String, String> {
     for folder in &s.special_folders {
         apply(
             &format!("특수 폴더 '{}'", folder.display_name),
-            set_special_folder_path(folder.key_name.clone(), folder.current_path.clone()),
+            apply_special_folder_path(&folder.key_name, &folder.current_path),
         );
     }
 
@@ -151,4 +152,3 @@ pub fn restore_from_point(id: String) -> Result<String, String> {
         ))
     }
 }
-

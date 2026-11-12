@@ -12,6 +12,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { SystemSummary, TabKey } from "../types";
+import { formatGigabytes, formatUptime } from "../lib/format";
 
 interface DashboardTabProps {
   summary: SystemSummary | null;
@@ -22,15 +23,6 @@ interface DashboardTabProps {
 export const DashboardTab: React.FC<DashboardTabProps> = ({ summary, onNavigateTab }) => {
   const [quickToggling, setQuickToggling] = useState(false);
   const [feedback, setFeedback] = useState<string | null>(null);
-
-  const formatUptime = (seconds: number) => {
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    if (days > 0) return `${days}일 ${hours}시간 ${mins}분`;
-    if (hours > 0) return `${hours}시간 ${mins}분`;
-    return `${mins}분`;
-  };
 
   const handleQuickClassicMenu = async () => {
     try {
@@ -56,11 +48,6 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({ summary, onNavigateT
     } finally {
       setQuickToggling(false);
     }
-  };
-
-  const formatBytes = (bytes: number) => {
-    const gb = bytes / (1024 * 1024 * 1024);
-    return `${gb.toFixed(1)} GB`;
   };
 
   return (
@@ -113,7 +100,7 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({ summary, onNavigateT
             {summary?.memory_percentage.toFixed(0)}% 점유
           </div>
           <div className="text-xs text-slate-400 mt-1">
-            {summary ? formatBytes(summary.used_memory) : "0 GB"} / {summary ? formatBytes(summary.total_memory) : "0 GB"}
+            {summary ? formatGigabytes(summary.used_memory) : "0 GB"} / {summary ? formatGigabytes(summary.total_memory) : "0 GB"}
           </div>
         </div>
 
@@ -168,8 +155,8 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({ summary, onNavigateT
                   />
                 </div>
                 <div className="flex justify-between text-xs text-slate-400">
-                  <span>사용: {formatBytes(used)}</span>
-                  <span>여유: {formatBytes(disk.available_space)} ({disk.total_space > 0 ? (100 - pct).toFixed(0) : 0}%)</span>
+                  <span>사용: {formatGigabytes(used)}</span>
+                  <span>여유: {formatGigabytes(disk.available_space)} ({disk.total_space > 0 ? (100 - pct).toFixed(0) : 0}%)</span>
                 </div>
               </div>
             );

@@ -19,6 +19,7 @@ import {
   RegistryJunkItem,
   RegistryCleanResult,
 } from "../types";
+import { formatBytesAdaptive } from "../lib/format";
 
 export const CleanerTab: React.FC = () => {
   const [subTab, setSubTab] = useState<"files" | "registry" | "shredder">("files");
@@ -81,8 +82,8 @@ export const CleanerTab: React.FC = () => {
     try {
       setFileCleaning(true);
       setFileErrorMsg(null);
-      const res = await invoke<CleanResult>("run_cleaner_purge", {
-        categories: activeCats,
+      const res = await invoke<CleanResult>("clean_selected_targets", {
+        categoryIds: activeCats,
       });
       setFileResult(res);
       await startFileScan();
@@ -124,7 +125,7 @@ export const CleanerTab: React.FC = () => {
       setRegCleaning(true);
       setRegErrorMsg(null);
       const res = await invoke<RegistryCleanResult>("clean_registry_junk", {
-        items: selectedList,
+        itemIds: selectedList.map((item) => item.id),
       });
       setRegResult(res);
       await startRegScan();
@@ -147,7 +148,7 @@ export const CleanerTab: React.FC = () => {
       setShredError(null);
       setShredResult(null);
       const res = await invoke<string>("shred_file", {
-        path: shredPath.trim(),
+        filePath: shredPath.trim(),
         passes: shredPasses,
       });
       setShredResult(res);
@@ -167,14 +168,6 @@ export const CleanerTab: React.FC = () => {
   const selectedFileBytes = categories
     .filter((c) => selected[c.category_id])
     .reduce((acc, c) => acc + c.total_size_bytes, 0);
-
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return "0 B";
-    const k = 1024;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
-  };
 
   return (
     <div className="space-y-6">
@@ -217,7 +210,7 @@ export const CleanerTab: React.FC = () => {
           }`}
         >
           <FileLock2 className="w-4 h-4" />
-          파일 보안 영구 파쇄기 (DoD Shredder)
+          파일 파쇄기 (덮어쓰기 후 삭제)
         </button>
       </div>
 
@@ -238,7 +231,7 @@ export const CleanerTab: React.FC = () => {
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
               <div>
                 <span className="font-bold">
-                  {formatBytes(fileResult.freed_bytes)}
+                  {formatBytesAdaptive(fileResult.freed_bytes)}
                 </span>
                 의 디스크 공간을 안전하게 확보했습니다! ({fileResult.deleted_files_count}개 파일 제거)
               </div>
@@ -251,7 +244,7 @@ export const CleanerTab: React.FC = () => {
               <div>
                 <div className="text-[11px] text-slate-400">발견된 불필요 항목</div>
                 <div className="text-xl font-bold text-slate-100 mt-1">
-                  {formatBytes(totalFileBytes)}
+                  {formatBytesAdaptive(totalFileBytes)}
                 </div>
               </div>
               <Trash2 className="w-8 h-8 text-slate-700" />
@@ -261,7 +254,7 @@ export const CleanerTab: React.FC = () => {
               <div>
                 <div className="text-[11px] text-slate-400">선택된 청소 대상</div>
                 <div className="text-xl font-bold text-blue-400 mt-1">
-                  {formatBytes(selectedFileBytes)}
+                  {formatBytesAdaptive(selectedFileBytes)}
                 </div>
               </div>
               <CheckCircle2 className="w-8 h-8 text-blue-500/30" />
@@ -342,7 +335,7 @@ export const CleanerTab: React.FC = () => {
                     </div>
                     <div className="text-right">
                       <div className="text-xs font-bold text-slate-200">
-                        {formatBytes(cat.total_size_bytes)}
+                        {formatBytesAdaptive(cat.total_size_bytes)}
                       </div>
                       <div className="text-[10px] text-slate-500">
                         {cat.file_count.toLocaleString()}개 파일
@@ -371,7 +364,7 @@ export const CleanerTab: React.FC = () => {
                 <div className="p-3 bg-slate-950/60 rounded-xl text-xs space-y-1">
                   <div className="flex justify-between text-slate-300">
                     <span>확보 예상 용량:</span>
-                    <span className="font-bold text-blue-400">{formatBytes(selectedFileBytes)}</span>
+                    <span className="font-bold text-blue-400">{formatBytesAdaptive(selectedFileBytes)}</span>
                   </div>
                   <div className="text-[11px] text-slate-500 mt-1">
                     * 임시 파일 및 캐시는 안전하게 삭제되며 개인 문서나 시스템 필수 파일은 보존됩니다.
@@ -546,7 +539,7 @@ export const CleanerTab: React.FC = () => {
       )}
 
       {/* ========================================================
-          서브 탭 3: 파일 보안 영구 파쇄기 (DoD Shredder)
+          서브 탭 3: 파일 파쇄기 (덮어쓰기 후 삭제)
          ======================================================== */}
       {subTab === "shredder" && (
         <div className="space-y-6">
@@ -572,10 +565,10 @@ export const CleanerTab: React.FC = () => {
               </div>
               <div>
                 <h2 className="text-base font-bold text-slate-100">
-                  클릭투트윅 DoD 5220.22-M 군사 규격 보안 파일 파쇄기
+                  클릭투트윅 파일 파쇄기
                 </h2>
                 <p className="text-xs text-slate-400">
-                  일반 삭제와 달리 복구 소프트웨어(Recuva, R-Studio 등)로 절대 복구할 수 없도록 섹터를 다중 덮어쓴 후 영구 삭제합니다.
+                  파일 내용을 1~7회 덮어쓴 뒤 삭제합니다. 저장장치 매핑, 파일 시스템, 스냅샷 및 백업에 따라 원본 데이터가 남을 수 있어 복구 불가나 특정 보안 규격 준수를 보장하지 않습니다.
                 </p>
               </div>
             </div>
@@ -605,8 +598,8 @@ export const CleanerTab: React.FC = () => {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                 {[
                   { passes: 1, title: "1단계 (빠름)", desc: "0x00 제로 필 (기본 파쇄)" },
-                  { passes: 3, title: "3단계 (권장 - DoD 표준)", desc: "0x00 -> 0xFF -> 무작위 난수" },
-                  { passes: 7, title: "7단계 (최고 보안 - DoD ECE)", desc: "7회 교차 덮어쓰기 (극비 문서)" },
+                  { passes: 3, title: "3단계 (권장)", desc: "0x00 -> 0xFF -> 무작위 난수" },
+                  { passes: 7, title: "7단계 (강력)", desc: "7회 반복 덮어쓰기" },
                 ].map((opt) => (
                   <div
                     key={opt.passes}

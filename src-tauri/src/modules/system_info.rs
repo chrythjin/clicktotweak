@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
-use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
 use std::mem::size_of;
+use std::time::Duration;
+use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, RefreshKind, System};
+
+const CPU_SAMPLE_COUNT: usize = 3;
+const CPU_SAMPLE_INTERVAL: Duration = Duration::from_millis(80);
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DiskInfo {
@@ -31,7 +35,9 @@ pub fn is_process_elevated() -> bool {
     #[cfg(windows)]
     unsafe {
         use windows::Win32::Foundation::{CloseHandle, HANDLE};
-        use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+        use windows::Win32::Security::{
+            GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+        };
         use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
         let mut token = HANDLE::default();
@@ -62,15 +68,22 @@ pub fn get_system_summary() -> SystemSummary {
             .with_memory(MemoryRefreshKind::everything()),
     );
 
-    // Refresh twice for accurate CPU usage
     sys.refresh_cpu_all();
-    std::thread::sleep(std::time::Duration::from_millis(100));
-    sys.refresh_cpu_all();
+    let mut cpu_usage = 0.0f32;
+    for _ in 0..CPU_SAMPLE_COUNT {
+        std::thread::sleep(CPU_SAMPLE_INTERVAL);
+        sys.refresh_cpu_all();
+        cpu_usage += sys.global_cpu_usage();
+    }
+    cpu_usage /= CPU_SAMPLE_COUNT as f32;
     sys.refresh_memory();
 
-    let cpu_name = sys.cpus().first().map(|c| c.brand().to_string()).unwrap_or_else(|| "Unknown CPU".to_string());
+    let cpu_name = sys
+        .cpus()
+        .first()
+        .map(|c| c.brand().to_string())
+        .unwrap_or_else(|| "Unknown CPU".to_string());
     let cpu_cores = sys.cpus().len();
-    let cpu_usage = sys.global_cpu_usage();
 
     let total_memory = sys.total_memory();
     let used_memory = sys.used_memory();
@@ -120,7 +133,9 @@ pub fn optimize_memory() -> Result<String, String> {
 
         let self_res = EmptyWorkingSet(GetCurrentProcess());
         if self_res.is_err() {
-            return Err("메모리 최적화 실패: 현재 프로세스 워킹셋을 정리할 수 없습니다.".to_string());
+            return Err(
+                "메모리 최적화 실패: 현재 프로세스 워킹셋을 정리할 수 없습니다.".to_string(),
+            );
         }
 
         // EmptyWorkingSet on another process requires PROCESS_SET_QUOTA,

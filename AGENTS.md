@@ -7,7 +7,7 @@
 ## OVERVIEW
 
 Click To Tweak Modern = 10년 전 개발 중단된 국민 PC 최적화 유틸리티 '클릭투트윅'을 Rust 2024 + Tauri v2 + React 19 기반으로 100% 재창조한 x64 무설치 포터블 유틸리티.
-핵심 설계 의도: **BSOD 위험 0% (커널 드라이버 100% 배제)** 및 **12개 분산 바이너리를 단일 독립 바이너리로 통합**.
+핵심 설계 의도: **커널 드라이버를 사용하지 않는 유저모드 구현** 및 **12개 분산 바이너리를 단일 독립 바이너리로 통합**.
 
 ## STRUCTURE
 
@@ -23,7 +23,7 @@ CLICKTOTWEAK/
 │   ├── src/modules/             # 도메인별 기능 모듈
 │   │   ├── control_panel.rs     # 바탕화면 아이콘, 마우스/키보드 속도, 12종 애플릿 런처
 │   │   ├── registry_cleaner.rs  # App Paths, Shared DLLs, MUI Cache 고아 레지스트리 청소
-│   │   ├── file_shredder.rs     # DoD 5220.22-M 1~7단계 영구 삭제 파쇄 엔진
+│   │   ├── file_shredder.rs     # 1~7단계 덮어쓰기 후 삭제
 │   │   ├── auto_shutdown.rs     # 컴퓨터 자동 예약 종료/재부팅 타이머
 │   │   ├── system_info.rs       # sysinfo 하드웨어 센서 & 메모리 트림
 │   │   ├── startup.rs           # 32/64비트 시작프로그램 자체 격리 안전 관리
@@ -52,8 +52,9 @@ CLICKTOTWEAK/
 | 작업 | 위치 | 비고 |
 |------|------|------|
 | 제어판/시스템 아이콘/Win11 트윅 | `src-tauri/src/modules/control_panel.rs` ↔ `src/tabs/ControlPanelTab.tsx` | 바탕화면 아이콘, 마우스 가속도 해제, 12종 제어판 런처 |
-| 레지스트리 청소 & DoD 파일 파쇄기 | `src-tauri/src/modules/registry_cleaner.rs`, `file_shredder.rs` ↔ `src/tabs/CleanerTab.tsx` | App Paths, Shared DLLs, MUI Cache, DoD 다중 덮어쓰기 |
+| 레지스트리 청소 & 파일 파쇄 | `src-tauri/src/modules/registry_cleaner.rs`, `file_shredder.rs` ↔ `src/tabs/CleanerTab.tsx` | App Paths, Shared DLLs, MUI Cache, 1~7회 덮어쓰기 파쇄 |
 | 예약 종료 타이머 | `src-tauri/src/modules/auto_shutdown.rs` ↔ `src/tabs/ControlPanelTab.tsx` | shutdown.exe 호출 래퍼 및 취소 |
-| 시작프로그램 관리 | `src-tauri/src/modules/startup.rs` ↔ `src/tabs/StartupTab.tsx` | 레지스트리 안전 격리 키 보관 |
+| 시작프로그램 관리 | `src-tauri/src/modules/startup.rs` ↔ `src/tabs/StartupTab.tsx` | 32/64비트 Run, StartupApproved, 격리 키 보관 |
 | 창 투명도 & 프로세스 제어 | `src-tauri/src/modules/window_tool.rs` ↔ `src/tabs/WindowToolTab.tsx` | SetLayeredWindowAttributes, NtSuspendProcess |
 | 배포 패키지 산출물 | `release/ClickToTweak-v1.0.0-Portable/` | 포터블 게임 클라이언트 레이아웃 |
+

@@ -126,7 +126,7 @@ export const BackupGuardTab: React.FC = () => {
           <div className="flex items-center gap-2">
             <ShieldCheck className="w-5 h-5 text-emerald-400" />
             <span className="text-sm font-semibold text-slate-200">
-              블루스크린 없는 유저모드 파일 보호 및 스냅샷 복원 (구 FProtect 현대화)
+              유저모드 파일 보호 및 스냅샷 복원
             </span>
           </div>
           <p className="text-xs text-slate-400 mt-1">
@@ -193,6 +193,19 @@ export const BackupGuardTab: React.FC = () => {
                       <div className="font-semibold text-slate-100 truncate flex items-center gap-1.5">
                         <FileText className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                         <span>{t.name}</span>
+                        {!t.snapshot_capable && (
+                          <span
+                            className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 shrink-0"
+                            title={
+                              t.is_folder
+                                ? "폴더는 스냅샷을 지원하지 않습니다. 삭제 후 파일을 등록해 주세요."
+                                : "원본 파일이 존재하지 않아 스냅샷을 만들 수 없습니다."
+                            }
+                          >
+                            <AlertCircle className="w-3 h-3" />
+                            {t.is_folder ? "폴더 미지원" : "원본 없음"}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[11px] text-slate-400 truncate mt-0.5 font-mono">
                         {t.path}
@@ -230,12 +243,31 @@ export const BackupGuardTab: React.FC = () => {
                 </div>
                 <button
                   onClick={() => handleCreateSnapshot(selectedTarget.id)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition"
+                  disabled={!selectedTarget.snapshot_capable}
+                  title={
+                    selectedTarget.snapshot_capable
+                      ? "현재 파일 상태를 스냅샷으로 저장합니다."
+                      : selectedTarget.is_folder
+                        ? "폴더는 스냅샷을 지원하지 않습니다. 삭제 후 파일을 등록해 주세요."
+                        : "원본 파일이 존재하지 않아 스냅샷을 만들 수 없습니다."
+                  }
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed disabled:shadow-none"
                 >
                   <Camera className="w-4 h-4" />
                   <span>스냅샷 즉시 생성</span>
                 </button>
               </div>
+
+              {!selectedTarget.snapshot_capable && (
+                <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-[11px] text-amber-300">
+                  <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>
+                    {selectedTarget.is_folder
+                      ? "이 항목은 폴더라 스냅샷을 만들 수 없습니다. 폴더를 삭제한 뒤 보호할 파일을 개별 등록해 주세요."
+                      : "원본 파일이 없어 스냅샷을 만들 수 없습니다. 경로가 변경되었거나 삭제된 항목입니다."}
+                  </span>
+                </div>
+              )}
 
               {/* Snapshots Timeline */}
               <div>

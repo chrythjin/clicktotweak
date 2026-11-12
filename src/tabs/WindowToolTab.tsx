@@ -16,6 +16,7 @@ import {
   Edit2,
 } from "lucide-react";
 import { WindowInfo } from "../types";
+import { ALPHA_MAX, ALPHA_MIN, alphaToPercentLabel } from "../lib/transparency";
 
 export const WindowToolTab: React.FC = () => {
   const [windows, setWindows] = useState<WindowInfo[]>([]);
@@ -290,16 +291,16 @@ export const WindowToolTab: React.FC = () => {
                 <div className="flex items-center justify-between text-xs mb-2">
                   <span className="font-semibold text-slate-200 flex items-center gap-1.5">
                     <Sliders className="w-3.5 h-3.5 text-blue-400" />
-                    창 투명도 조절 (0% ~ 100%)
+                    창 투명도 조절 (10% ~ 100%)
                   </span>
                   <span className="font-bold text-blue-400">
-                    {((alpha / 255) * 100).toFixed(0)}%
+                    {alphaToPercentLabel(alpha)}%
                   </span>
                 </div>
                 <input
                   type="range"
-                  min="25"
-                  max="255"
+                  min={ALPHA_MIN}
+                  max={ALPHA_MAX}
                   value={alpha}
                   onChange={(e) => setAlpha(Number(e.target.value))}
                   onPointerUp={commitAlpha}

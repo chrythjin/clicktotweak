@@ -34,7 +34,7 @@ fn get_process_name(pid: u32) -> String {
     format!("PID: {}", pid)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_open_windows() -> Vec<WindowInfo> {
     let mut windows_list = Vec::new();
 
@@ -42,8 +42,8 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
     unsafe {
         use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
         use windows::Win32::UI::WindowsAndMessaging::{
-            EnumWindows, GetClassNameW, GetWindowLongW, GetWindowTextLengthW, GetWindowTextW,
-            GetWindowThreadProcessId, IsWindowVisible, GWL_EXSTYLE, WS_EX_TOPMOST,
+            EnumWindows, GWL_EXSTYLE, GetClassNameW, GetWindowLongW, GetWindowTextLengthW,
+            GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, WS_EX_TOPMOST,
         };
 
         unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
@@ -64,7 +64,10 @@ pub fn get_open_windows() -> Vec<WindowInfo> {
                 let class_name = String::from_utf16_lossy(&class_buf[..class_len as usize]);
 
                 // Filter out system shell / tooltips / cloaked windows
-                if class_name == "Progman" || class_name == "Shell_TrayWnd" || title.trim().is_empty() {
+                if class_name == "Progman"
+                    || class_name == "Shell_TrayWnd"
+                    || title.trim().is_empty()
+                {
                     return BOOL(1);
                 }
 
@@ -104,9 +107,9 @@ pub fn get_window_at_cursor() -> Result<WindowInfo, String> {
     unsafe {
         use windows::Win32::Foundation::POINT;
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetAncestor, GetClassNameW, GetCursorPos, GetWindowLongW, GetWindowTextLengthW,
-            GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, WindowFromPoint, GA_ROOT,
-            GWL_EXSTYLE, WS_EX_TOPMOST,
+            GA_ROOT, GWL_EXSTYLE, GetAncestor, GetClassNameW, GetCursorPos, GetWindowLongW,
+            GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+            WS_EX_TOPMOST, WindowFromPoint,
         };
 
         let mut pt = POINT::default();
@@ -166,8 +169,8 @@ pub fn set_window_transparency(hwnd: isize, alpha: u8) -> Result<String, String>
     unsafe {
         use windows::Win32::Foundation::{COLORREF, HWND};
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongW, SetLayeredWindowAttributes, SetWindowLongW, SetWindowPos, GWL_EXSTYLE,
-            HWND_TOP, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+            GWL_EXSTYLE, GetWindowLongW, HWND_TOP, LWA_ALPHA, SWP_FRAMECHANGED, SWP_NOMOVE,
+            SWP_NOSIZE, SWP_NOZORDER, SetLayeredWindowAttributes, SetWindowLongW, SetWindowPos,
             WS_EX_LAYERED,
         };
 
@@ -176,7 +179,8 @@ pub fn set_window_transparency(hwnd: isize, alpha: u8) -> Result<String, String>
 
         ex_style |= WS_EX_LAYERED.0;
         SetWindowLongW(win, GWL_EXSTYLE, ex_style as i32);
-        SetLayeredWindowAttributes(win, COLORREF(0), alpha, LWA_ALPHA).map_err(|e| e.to_string())?;
+        SetLayeredWindowAttributes(win, COLORREF(0), alpha, LWA_ALPHA)
+            .map_err(|e| e.to_string())?;
 
         if alpha == 255 {
             ex_style &= !WS_EX_LAYERED.0;
@@ -192,7 +196,10 @@ pub fn set_window_transparency(hwnd: isize, alpha: u8) -> Result<String, String>
             );
         }
 
-        Ok(format!("창 투명도가 {}% 로 설정되었습니다.", (alpha as f32 / 255.0 * 100.0) as u32))
+        Ok(format!(
+            "창 투명도가 {}% 로 설정되었습니다.",
+            (alpha as f32 / 255.0 * 100.0) as u32
+        ))
     }
     #[cfg(not(windows))]
     Err("Windows 전용 기능입니다.".to_string())
@@ -204,7 +211,7 @@ pub fn set_window_topmost(hwnd: isize, enable: bool) -> Result<String, String> {
     unsafe {
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE,
+            HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
         };
 
         let win = HWND(hwnd as *mut _);
@@ -230,9 +237,9 @@ pub fn set_window_topmost(hwnd: isize, enable: bool) -> Result<String, String> {
 pub fn set_window_title(hwnd: isize, title: String) -> Result<String, String> {
     #[cfg(windows)]
     unsafe {
-        use windows::core::HSTRING;
         use windows::Win32::Foundation::HWND;
         use windows::Win32::UI::WindowsAndMessaging::SetWindowTextW;
+        use windows::core::HSTRING;
 
         let win = HWND(hwnd as *mut _);
         let h_title = HSTRING::from(&title);
@@ -252,7 +259,7 @@ pub fn set_window_visibility(hwnd: isize, show: bool) -> Result<String, String> 
     #[cfg(windows)]
     unsafe {
         use windows::Win32::Foundation::HWND;
-        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE, SW_SHOW};
+        use windows::Win32::UI::WindowsAndMessaging::{SW_HIDE, SW_SHOW, ShowWindow};
 
         let win = HWND(hwnd as *mut _);
         let _ = ShowWindow(win, if show { SW_SHOW } else { SW_HIDE });
@@ -271,10 +278,10 @@ pub fn set_window_visibility(hwnd: isize, show: bool) -> Result<String, String> 
 pub fn suspend_process(pid: u32) -> Result<String, String> {
     #[cfg(windows)]
     unsafe {
-        use windows::core::s;
         use windows::Win32::Foundation::{CloseHandle, HANDLE};
         use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
         use windows::Win32::System::Threading::{OpenProcess, PROCESS_SUSPEND_RESUME};
+        use windows::core::s;
 
         type NtSuspendProcessFn = unsafe extern "system" fn(HANDLE) -> i32;
 
@@ -290,7 +297,10 @@ pub fn suspend_process(pid: u32) -> Result<String, String> {
         if status == 0 {
             Ok(format!("프로세스 (PID: {})가 일시 중지되었습니다.", pid))
         } else {
-            Err(format!("프로세스 일시 중지 실패 (NTSTATUS: 0x{:08X})", status))
+            Err(format!(
+                "프로세스 일시 중지 실패 (NTSTATUS: 0x{:08X})",
+                status
+            ))
         }
     }
     #[cfg(not(windows))]
@@ -301,10 +311,10 @@ pub fn suspend_process(pid: u32) -> Result<String, String> {
 pub fn resume_process(pid: u32) -> Result<String, String> {
     #[cfg(windows)]
     unsafe {
-        use windows::core::s;
         use windows::Win32::Foundation::{CloseHandle, HANDLE};
         use windows::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
         use windows::Win32::System::Threading::{OpenProcess, PROCESS_SUSPEND_RESUME};
+        use windows::core::s;
 
         type NtResumeProcessFn = unsafe extern "system" fn(HANDLE) -> i32;
 
@@ -337,17 +347,16 @@ pub fn trim_process_memory(pid: u32) -> Result<String, String> {
             OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_SET_QUOTA,
         };
 
-        let handle = OpenProcess(
-            PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA,
-            false,
-            pid,
-        )
-        .map_err(|e| e.to_string())?;
+        let handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_SET_QUOTA, false, pid)
+            .map_err(|e| e.to_string())?;
         let res = EmptyWorkingSet(handle);
         let _ = CloseHandle(handle);
 
         if res.is_ok() {
-            Ok(format!("프로세스 (PID: {})의 워킹셋 메모리가 최적화되었습니다.", pid))
+            Ok(format!(
+                "프로세스 (PID: {})의 워킹셋 메모리가 최적화되었습니다.",
+                pid
+            ))
         } else {
             Err(format!("프로세스 메모리 최적화 실패: {:?}", res))
         }

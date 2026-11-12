@@ -2,9 +2,9 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use winreg::RegKey;
 use winreg::enums::*;
 use winreg::reg_value::RegValue;
-use winreg::RegKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DesktopLayoutSnapshot {
@@ -23,7 +23,9 @@ pub struct StoredRegValue {
 
 fn get_storage_dir() -> PathBuf {
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let p = PathBuf::from(local).join("ClickToTweakModern").join("DesktopIcons");
+        let p = PathBuf::from(local)
+            .join("ClickToTweakModern")
+            .join("DesktopIcons");
         let _ = fs::create_dir_all(&p);
         p
     } else {
@@ -35,6 +37,17 @@ const REG_BAGS_DESKTOP: &str = r"Software\Microsoft\Windows\Shell\Bags\1\Desktop
 
 fn is_managed_value(name: &str) -> bool {
     name.starts_with("ItemPos") || name.starts_with("IconLayouts")
+}
+
+fn validate_snapshot_id(id: &str) -> Result<(), String> {
+    if id.is_empty()
+        || !id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err("유효하지 않은 스냅샷 식별자입니다.".to_string());
+    }
+    Ok(())
 }
 
 fn reg_type_from_u32(value: u32) -> Result<RegType, String> {
@@ -61,8 +74,7 @@ fn parse_snapshot_dump(
     match serde_json::from_str::<std::collections::HashMap<String, StoredRegValue>>(content) {
         Ok(map) => Ok(map),
         Err(_) => {
-            let legacy: std::collections::HashMap<String, Vec<u8>> =
-                serde_json::from_str(content)?;
+            let legacy: std::collections::HashMap<String, Vec<u8>> = serde_json::from_str(content)?;
             Ok(legacy
                 .into_iter()
                 .map(|(k, v)| {
@@ -83,7 +95,12 @@ fn validate_snapshot_types(
     dump: &std::collections::HashMap<String, StoredRegValue>,
 ) -> Result<(), String> {
     for (name, stored) in dump {
-        let value_type = stored.reg_type.ok_or_else(|| format!("이전 백업의 '{}' 값에는 형식 정보가 없어 안전하게 복원할 수 없습니다.", name))?;
+        let value_type = stored.reg_type.ok_or_else(|| {
+            format!(
+                "이전 백업의 '{}' 값에는 형식 정보가 없어 안전하게 복원할 수 없습니다.",
+                name
+            )
+        })?;
         reg_type_from_u32(value_type)?;
     }
     Ok(())
@@ -100,16 +117,16 @@ pub fn backup_desktop_icon_layout(name: String) -> Result<DesktopLayoutSnapshot,
         std::collections::HashMap::new();
 
     for (val_name, _) in key.enum_values().filter_map(|r| r.ok()) {
-        if is_managed_value(&val_name) {
-            if let Ok(raw) = key.get_raw_value(&val_name) {
-                values_dump.insert(
-                    val_name,
-                    StoredRegValue {
-                        bytes: raw.bytes,
-                        reg_type: Some(raw.vtype as u32),
-                    },
-                );
-            }
+        if is_managed_value(&val_name)
+            && let Ok(raw) = key.get_raw_value(&val_name)
+        {
+            values_dump.insert(
+                val_name,
+                StoredRegValue {
+                    bytes: raw.bytes,
+                    reg_type: Some(raw.vtype as u32),
+                },
+            );
         }
     }
 
@@ -128,7 +145,11 @@ pub fn backup_desktop_icon_layout(name: String) -> Result<DesktopLayoutSnapshot,
     }
 
     let now = Local::now();
-    let id = format!("layout_{}", now.format("%Y%m%d_%H%M%S"));
+    let id = format!(
+        "layout_{}_{}",
+        now.format("%Y%m%d_%H%M%S"),
+        now.timestamp_subsec_millis()
+    );
     let created_at = now.format("%Y-%m-%d %H:%M:%S").to_string();
     let display_name = if name.trim().is_empty() {
         format!("바탕화면 배치 백업 ({})", now.format("%m/%d %H:%M"))
@@ -165,12 +186,11 @@ pub fn list_desktop_icon_layouts() -> Vec<DesktopLayoutSnapshot> {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
             let fname = path.file_name().unwrap_or_default().to_string_lossy();
-            if fname.ends_with(".meta.json") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(snap) = serde_json::from_str::<DesktopLayoutSnapshot>(&content) {
-                        list.push(snap);
-                    }
-                }
+            if fname.ends_with(".meta.json")
+                && let Ok(content) = fs::read_to_string(&path)
+                && let Ok(snap) = serde_json::from_str::<DesktopLayoutSnapshot>(&content)
+            {
+                list.push(snap);
             }
         }
     }
@@ -181,6 +201,7 @@ pub fn list_desktop_icon_layouts() -> Vec<DesktopLayoutSnapshot> {
 
 #[tauri::command]
 pub fn restore_desktop_icon_layout(id: String) -> Result<String, String> {
+    validate_snapshot_id(&id)?;
     let dir = get_storage_dir();
     let file_path = dir.join(format!("{}.json", id));
 
@@ -191,10 +212,18 @@ pub fn restore_desktop_icon_layout(id: String) -> Result<String, String> {
     let content = fs::read_to_string(file_path).map_err(|e| e.to_string())?;
     let dump = parse_snapshot_dump(&content).map_err(|e| e.to_string())?;
     validate_snapshot_types(&dump)?;
-    let typed_values: Vec<_> = dump.iter().map(|(name, stored)| {
-        let value_type = stored.reg_type.ok_or_else(|| format!("이전 백업의 '{}' 값에는 형식 정보가 없어 안전하게 복원할 수 없습니다.", name))?;
-        Ok((name, stored, reg_type_from_u32(value_type)?))
-    }).collect::<Result<_, String>>()?;
+    let typed_values: Vec<_> = dump
+        .iter()
+        .map(|(name, stored)| {
+            let value_type = stored.reg_type.ok_or_else(|| {
+                format!(
+                    "이전 백업의 '{}' 값에는 형식 정보가 없어 안전하게 복원할 수 없습니다.",
+                    name
+                )
+            })?;
+            Ok((name, stored, reg_type_from_u32(value_type)?))
+        })
+        .collect::<Result<_, String>>()?;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu
@@ -217,7 +246,7 @@ pub fn restore_desktop_icon_layout(id: String) -> Result<String, String> {
 
     #[cfg(windows)]
     unsafe {
-        use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+        use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
         SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
     }
 
@@ -248,15 +277,33 @@ mod tests {
 
     #[test]
     fn typed_snapshot_preserves_registry_types() {
-        let dump = parse_snapshot_dump(r#"{"Mode":{"bytes":[1,0,0,0],"reg_type":4},"ItemPos":{"bytes":[1,2],"reg_type":3}}"#).unwrap();
+        let dump = parse_snapshot_dump(
+            r#"{"Mode":{"bytes":[1,0,0,0],"reg_type":4},"ItemPos":{"bytes":[1,2],"reg_type":3}}"#,
+        )
+        .unwrap();
         assert!(validate_snapshot_types(&dump).is_ok());
-        assert_eq!(reg_type_from_u32(dump["Mode"].reg_type.unwrap()).unwrap(), REG_DWORD);
-        assert_eq!(reg_type_from_u32(dump["ItemPos"].reg_type.unwrap()).unwrap(), REG_BINARY);
+        assert_eq!(
+            reg_type_from_u32(dump["Mode"].reg_type.unwrap()).unwrap(),
+            REG_DWORD
+        );
+        assert_eq!(
+            reg_type_from_u32(dump["ItemPos"].reg_type.unwrap()).unwrap(),
+            REG_BINARY
+        );
     }
 
     #[test]
     fn unsupported_registry_type_is_rejected() {
         let dump = parse_snapshot_dump(r#"{"Mode":{"bytes":[0],"reg_type":999}}"#).unwrap();
         assert!(validate_snapshot_types(&dump).is_err());
+    }
+
+    #[test]
+    fn snapshot_id_rejects_path_traversal_segments() {
+        assert!(validate_snapshot_id("layout_20261111_120000").is_ok());
+        assert!(validate_snapshot_id("..\\..\\evil").is_err());
+        assert!(validate_snapshot_id("layout/../../evil").is_err());
+        assert!(validate_snapshot_id("").is_err());
+        assert!(validate_snapshot_id("layout 2026").is_err());
     }
 }

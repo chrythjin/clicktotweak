@@ -1,7 +1,22 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Cpu, HardDrive, RefreshCw, Sparkles, CheckCircle2 } from "lucide-react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import {
+  Cpu,
+  HardDrive,
+  RefreshCw,
+  Sparkles,
+  CheckCircle2,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
 import { SystemSummary, TabKey } from "../types";
+
+interface ElevationStatus {
+  is_elevated: boolean;
+  user_name: string;
+  can_elevate: boolean;
+}
 
 interface HeaderProps {
   currentTab: TabKey;
@@ -25,8 +40,26 @@ const tabTitles: Record<TabKey, { title: string; subtitle: string }> = {
 export const Header: React.FC<HeaderProps> = ({ currentTab, summary, onRefresh }) => {
   const [optimizing, setOptimizing] = useState(false);
   const [notifyMsg, setNotifyMsg] = useState<string | null>(null);
+  const [elevation, setElevation] = useState<ElevationStatus | null>(null);
 
   const info = tabTitles[currentTab];
+
+  useEffect(() => {
+    invoke<ElevationStatus>("get_elevation_status")
+      .then(setElevation)
+      .catch(() => setElevation(null));
+  }, []);
+
+  const handleRelaunchAsAdmin = async () => {
+    try {
+      const res = await invoke<string>("relaunch_as_admin");
+      setNotifyMsg(res);
+      setTimeout(() => getCurrentWindow().close(), 800);
+    } catch (err: any) {
+      setNotifyMsg(`관리자 권한 승인을 요청하지 못했습니다: ${err}`);
+      setTimeout(() => setNotifyMsg(null), 4000);
+    }
+  };
 
   const handleQuickOptimize = async () => {
     try {
@@ -47,15 +80,15 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, summary, onRefresh }
   const ramTotalGb = summary ? (summary.total_memory / 1024 / 1024 / 1024).toFixed(1) : "0";
 
   return (
-    <header className="h-20 bg-slate-900/60 backdrop-blur border-b border-slate-800 px-6 flex items-center justify-between shrink-0">
-      <div>
-        <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2">
+    <header className="h-20 bg-slate-900/60 backdrop-blur border-b border-slate-800 px-6 flex items-center justify-between gap-4 shrink-0">
+      <div className="min-w-0">
+        <h1 className="text-xl font-bold text-slate-100 flex items-center gap-2 truncate">
           {info.title}
         </h1>
-        <p className="text-xs text-slate-400 mt-0.5">{info.subtitle}</p>
+        <p className="text-xs text-slate-400 mt-0.5 truncate">{info.subtitle}</p>
       </div>
 
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 shrink-0">
         {/* Toast / Notification pill */}
         {notifyMsg && (
           <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs animate-fade-in">
@@ -82,6 +115,27 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, summary, onRefresh }
                 {ramUsedGb}/{ramTotalGb} GB ({summary.memory_percentage.toFixed(0)}%)
               </span>
             </div>
+          </div>
+        )}
+
+        {/* Elevation badge / relaunch action */}
+        {elevation && !elevation.is_elevated && (
+          <button
+            onClick={handleRelaunchAsAdmin}
+            title="관리자 권한이 필요한 기능(HKLM 레지스트리, hosts 차단, 시스템 임시 폴더 정리)을 사용하려면 클릭하세요."
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/30 text-xs font-semibold transition hover:bg-amber-500/20"
+          >
+            <ShieldAlert className="w-3.5 h-3.5" />
+            <span>관리자 권한 필요</span>
+          </button>
+        )}
+        {elevation?.is_elevated && (
+          <div
+            title="관리자 권한으로 실행 중입니다."
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold"
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>관리자 권한</span>
           </div>
         )}
 

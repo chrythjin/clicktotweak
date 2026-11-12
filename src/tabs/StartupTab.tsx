@@ -91,6 +91,13 @@ export const StartupTab: React.FC = () => {
   };
 
   const getLocationBadge = (loc: string) => {
+    if (loc.startsWith("비활성화됨")) {
+      return (
+        <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-slate-700/40 text-slate-300 border border-slate-600/40">
+          <Database className="w-3 h-3" /> 격리됨
+        </span>
+      );
+    }
     if (loc.includes("HKCU")) {
       return (
         <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded bg-blue-500/10 text-blue-400 border border-blue-500/20">
