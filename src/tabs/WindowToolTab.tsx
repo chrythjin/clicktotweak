@@ -11,19 +11,18 @@ import {
   Play,
   Sparkles,
   RefreshCw,
-  CheckCircle2,
-  AlertCircle,
   Edit2,
 } from "lucide-react";
 import { WindowInfo } from "../types";
 import { ALPHA_MAX, ALPHA_MIN, alphaToPercentLabel } from "../lib/transparency";
+import { useFeedback } from "../hooks/useFeedback";
+import { FeedbackBanner } from "../components/FeedbackBanner";
 
 export const WindowToolTab: React.FC = () => {
   const [windows, setWindows] = useState<WindowInfo[]>([]);
   const [selectedHwnd, setSelectedHwnd] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [isError, setIsError] = useState(false);
+  const { message: feedback, isError, notify } = useFeedback(4000);
 
   // Control states for selected window
   const [alpha, setAlpha] = useState<number>(255);
@@ -37,6 +36,7 @@ export const WindowToolTab: React.FC = () => {
       if (res.length > 0 && selectedHwnd === null) {
         setSelectedHwnd(res[0].hwnd);
         setEditTitle(res[0].title);
+        setAlpha(res[0].alpha);
       }
     } catch (e: any) {
       notify(`창 목록 조회 실패: ${e}`, true);
@@ -49,24 +49,18 @@ export const WindowToolTab: React.FC = () => {
     loadWindows();
   }, []);
 
-  const notify = (msg: string, err = false) => {
-    setFeedback(msg);
-    setIsError(err);
-    setTimeout(() => setFeedback(null), 4000);
-  };
-
   const handlePickWindowAtCursor = async () => {
     try {
-      notify("커서 아래 창을 획득했습니다.");
       const info = await invoke<WindowInfo>("get_window_at_cursor");
       setSelectedHwnd(info.hwnd);
       setEditTitle(info.title);
-      // Ensure it's in the list
+      setAlpha(info.alpha);
+      // Ensure it's in the list with latest metadata
       setWindows((prev) => {
         if (!prev.some((w) => w.hwnd === info.hwnd)) {
           return [info, ...prev];
         }
-        return prev;
+        return prev.map((w) => (w.hwnd === info.hwnd ? info : w));
       });
       notify(`'${info.title}' (${info.process_name}) 창이 선택되었습니다.`);
     } catch (e: any) {
@@ -77,13 +71,16 @@ export const WindowToolTab: React.FC = () => {
   const selectedWin = windows.find((w) => w.hwnd === selectedHwnd);
 
   const commitAlpha = async () => {
-    if (!selectedHwnd) return;
+    if (selectedHwnd === null) return;
     try {
       const res = await invoke<string>("set_window_transparency", {
         hwnd: selectedHwnd,
         alpha,
       });
       notify(res, false);
+      setWindows((prev) =>
+        prev.map((w) => (w.hwnd === selectedHwnd ? { ...w, alpha } : w))
+      );
     } catch (e: any) {
       notify(`투명도 변경 실패: ${e}`, true);
     }
@@ -107,7 +104,7 @@ export const WindowToolTab: React.FC = () => {
   };
 
   const handleSaveTitle = async () => {
-    if (!selectedHwnd || !editTitle.trim()) return;
+    if (selectedHwnd === null || !editTitle.trim()) return;
     try {
       const res = await invoke<string>("set_window_title", {
         hwnd: selectedHwnd,
@@ -199,22 +196,7 @@ export const WindowToolTab: React.FC = () => {
       </div>
 
       {/* Feedback Banner */}
-      {feedback && (
-        <div
-          className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
-            isError
-              ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
-              : "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
-          }`}
-        >
-          {isError ? (
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          )}
-          <span>{feedback}</span>
-        </div>
-      )}
+      <FeedbackBanner message={feedback} isError={isError} />
 
       {/* Main Grid: Window List (Left) + Detail Control Panel (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -232,6 +214,7 @@ export const WindowToolTab: React.FC = () => {
                   onClick={() => {
                     setSelectedHwnd(win.hwnd);
                     setEditTitle(win.title);
+                    setAlpha(win.alpha);
                   }}
                   className={`w-full text-left p-3 rounded-xl border transition flex items-center justify-between text-xs ${
                     isSelected

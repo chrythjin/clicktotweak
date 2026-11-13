@@ -165,9 +165,9 @@ export const CleanerTab: React.FC = () => {
   }, []);
 
   const totalFileBytes = categories.reduce((acc, c) => acc + c.total_size_bytes, 0);
-  const selectedFileBytes = categories
-    .filter((c) => selected[c.category_id])
-    .reduce((acc, c) => acc + c.total_size_bytes, 0);
+  const selectedCategories = categories.filter((c) => selected[c.category_id]);
+  const selectedFileBytes = selectedCategories.reduce((acc, c) => acc + c.total_size_bytes, 0);
+  const selectedFileCount = selectedCategories.reduce((acc, c) => acc + c.file_count, 0);
 
   return (
     <div className="space-y-6">
@@ -256,6 +256,9 @@ export const CleanerTab: React.FC = () => {
                 <div className="text-xl font-bold text-blue-400 mt-1">
                   {formatBytesAdaptive(selectedFileBytes)}
                 </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  {selectedFileCount.toLocaleString()}개 파일
+                </div>
               </div>
               <CheckCircle2 className="w-8 h-8 text-blue-500/30" />
             </div>
@@ -272,7 +275,7 @@ export const CleanerTab: React.FC = () => {
 
               <button
                 onClick={() => setShowFileConfirm(true)}
-                disabled={fileScanning || fileCleaning || selectedFileBytes === 0}
+                disabled={fileScanning || fileCleaning || selectedFileCount === 0}
                 className="flex-1 py-2.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-md shadow-blue-600/20 transition disabled:opacity-50"
               >
                 <Trash2 className="w-3.5 h-3.5" />
@@ -362,6 +365,10 @@ export const CleanerTab: React.FC = () => {
                 </div>
 
                 <div className="p-3 bg-slate-950/60 rounded-xl text-xs space-y-1">
+                  <div className="flex justify-between text-slate-300">
+                    <span>선택된 파일 수:</span>
+                    <span className="font-bold text-slate-100">{selectedFileCount.toLocaleString()}개</span>
+                  </div>
                   <div className="flex justify-between text-slate-300">
                     <span>확보 예상 용량:</span>
                     <span className="font-bold text-blue-400">{formatBytesAdaptive(selectedFileBytes)}</span>

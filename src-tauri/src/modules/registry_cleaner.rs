@@ -1,3 +1,4 @@
+use crate::modules::common::expand_env_vars;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use winreg::enums::*;
@@ -6,7 +7,7 @@ use winreg::{HKEY, RegKey};
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RegistryJunkItem {
     pub id: String,
-    pub category: String, // "무효한 응용프로그램 경로(App Paths)", "누락된 공유 라이브러리(Shared DLLs)", "MUI 캐시 찌꺼기"
+    pub category: String,
     pub key_path: String,
     pub value_name: String,
     pub target_path: String,
@@ -20,6 +21,43 @@ pub struct RegistryCleanResult {
     pub message: String,
 }
 
+/// 따옴표·인자·환경변수를 정리해 실제 파일 시스템 경로 후보를 추출한다.
+/// 상대 경로(예: `notepad.exe`)나 리소스 참조(`@%SystemRoot%\...,-1`)는 None을 반환해 오탐을 막는다.
+fn resolve_registry_file_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.starts_with('@') {
+        return None;
+    }
+
+    let extracted = if let Some(after_open) = trimmed.strip_prefix('"') {
+        after_open.split('"').next().unwrap_or("").trim()
+    } else {
+        trimmed
+    };
+
+    if extracted.is_empty() {
+        return None;
+    }
+
+    let expanded = expand_env_vars(extracted);
+    let candidate = expanded.trim_matches('"').trim();
+    if candidate.is_empty() {
+        return None;
+    }
+
+    // 정의되지 않은 환경변수가 남아 있으면 존재 여부를 단정할 수 없으므로 건너뛴다.
+    if candidate.contains('%') {
+        return None;
+    }
+
+    let path = Path::new(candidate);
+    if !path.is_absolute() {
+        return None;
+    }
+
+    Some(candidate.to_string())
+}
+
 // 1. App Paths 무효 항목 검사
 fn scan_app_paths(hk: HKEY, root_name: &str, items: &mut Vec<RegistryJunkItem>) {
     let root = RegKey::predef(hk);
@@ -31,21 +69,16 @@ fn scan_app_paths(hk: HKEY, root_name: &str, items: &mut Vec<RegistryJunkItem>) 
 
     for subkey_name in app_paths_key.enum_keys().filter_map(|k| k.ok()) {
         if let Ok(sub) = app_paths_key.open_subkey(&subkey_name) {
-            // 기본값 (경로)
             let path_val: String = match sub.get_value("") {
                 Ok(v) => v,
                 Err(_) => continue,
             };
 
-            // 따옴표 제거
-            let clean_path = path_val.trim_matches('"').trim();
-            if clean_path.is_empty() {
+            let Some(clean_path) = resolve_registry_file_path(&path_val) else {
                 continue;
-            }
+            };
 
-            // 파일이 존재하는지 검사
-            let p = Path::new(clean_path);
-            if !p.exists() {
+            if !Path::new(&clean_path).exists() {
                 items.push(RegistryJunkItem {
                     id: format!("{}\\App Paths\\{}", root_name, subkey_name),
                     category: "무효한 프로그램 경로 (App Paths)".to_string(),
@@ -54,7 +87,7 @@ fn scan_app_paths(hk: HKEY, root_name: &str, items: &mut Vec<RegistryJunkItem>) 
                         root_name, subkey_name
                     ),
                     value_name: subkey_name.clone(),
-                    target_path: clean_path.to_string(),
+                    target_path: clean_path.clone(),
                     description: format!(
                         "파일이 존재하지 않는 무효한 실행 파일 경로: {}",
                         clean_path
@@ -74,19 +107,17 @@ fn scan_shared_dlls(items: &mut Vec<RegistryJunkItem>) {
     };
 
     for (name, _) in key.enum_values().filter_map(|v| v.ok()) {
-        let clean_path = name.trim_matches('"').trim();
-        if clean_path.is_empty() {
+        let Some(clean_path) = resolve_registry_file_path(&name) else {
             continue;
-        }
+        };
 
-        let p = Path::new(clean_path);
-        if !p.exists() {
+        if !Path::new(&clean_path).exists() {
             items.push(RegistryJunkItem {
                 id: format!("SharedDLLs_{}", name),
                 category: "누락된 공유 DLL (Shared DLLs)".to_string(),
                 key_path: r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs".to_string(),
                 value_name: name.clone(),
-                target_path: clean_path.to_string(),
+                target_path: clean_path.clone(),
                 description: format!("실제 디스크에 없는 누락된 공유 DLL 참조: {}", clean_path),
             });
         }
@@ -104,28 +135,24 @@ fn scan_mui_cache(items: &mut Vec<RegistryJunkItem>) {
     };
 
     for (name, _) in key.enum_values().filter_map(|v| v.ok()) {
-        // MuiCache의 값 이름은 "C:\Path\To\file.exe.FriendlyAppName" 형태이거나 경로 자체
-        let path_candidate = if let Some(idx) = name.find(".FriendlyAppName") {
-            &name[..idx]
-        } else if let Some(idx) = name.find(".ApplicationCompany") {
-            &name[..idx]
-        } else {
-            &name
+        let path_candidate = name
+            .strip_suffix(".FriendlyAppName")
+            .or_else(|| name.strip_suffix(".ApplicationCompany"))
+            .unwrap_or(&name);
+
+        let Some(clean_path) = resolve_registry_file_path(path_candidate) else {
+            continue;
         };
 
-        let clean_path = path_candidate.trim_matches('"').trim();
-        if clean_path.len() > 3 && clean_path.contains(":\\") {
-            let p = Path::new(clean_path);
-            if !p.exists() {
-                items.push(RegistryJunkItem {
-                    id: format!("MuiCache_{}", name),
-                    category: "MUI 캐시 잔여 항목".to_string(),
-                    key_path: r"HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache".to_string(),
-                    value_name: name.clone(),
-                    target_path: clean_path.to_string(),
-                    description: format!("삭제된 프로그램의 MUI 캐시: {}", clean_path),
-                });
-            }
+        if clean_path.len() > 3 && !Path::new(&clean_path).exists() {
+            items.push(RegistryJunkItem {
+                id: format!("MuiCache_{}", name),
+                category: "MUI 캐시 잔여 항목".to_string(),
+                key_path: r"HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache".to_string(),
+                value_name: name.clone(),
+                target_path: clean_path.clone(),
+                description: format!("삭제된 프로그램의 MUI 캐시: {}", clean_path),
+            });
         }
     }
 }
@@ -142,6 +169,18 @@ pub fn scan_registry_junk() -> Result<Vec<RegistryJunkItem>, String> {
     Ok(items)
 }
 
+fn delete_subkey_in(hive: &RegKey, parent_path: &str, subkey: &str) -> bool {
+    hive.open_subkey_with_flags(parent_path, KEY_WRITE)
+        .and_then(|parent| parent.delete_subkey_all(subkey))
+        .is_ok()
+}
+
+fn delete_value_in(hive: &RegKey, key_path: &str, value_name: &str) -> bool {
+    hive.open_subkey_with_flags(key_path, KEY_WRITE)
+        .and_then(|key| key.delete_value(value_name))
+        .is_ok()
+}
+
 #[tauri::command(async)]
 pub fn clean_registry_junk(item_ids: Vec<String>) -> Result<RegistryCleanResult, String> {
     let mut cleaned = 0;
@@ -150,51 +189,26 @@ pub fn clean_registry_junk(item_ids: Vec<String>) -> Result<RegistryCleanResult,
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
 
+    const APP_PATHS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths";
+    const SHARED_DLLS: &str = r"SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs";
+    const MUI_CACHE: &str =
+        r"Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache";
+
     for id in item_ids {
-        if let Some(subkey) = id.strip_prefix("HKCU\\App Paths\\") {
-            match hkcu.open_subkey_with_flags(
-                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths",
-                KEY_WRITE,
-            ) {
-                Ok(app_paths) => match app_paths.delete_subkey_all(subkey) {
-                    Ok(()) => cleaned += 1,
-                    Err(_) => failed += 1,
-                },
-                Err(_) => failed += 1,
-            }
+        let ok = if let Some(subkey) = id.strip_prefix("HKCU\\App Paths\\") {
+            delete_subkey_in(&hkcu, APP_PATHS, subkey)
         } else if let Some(subkey) = id.strip_prefix("HKLM\\App Paths\\") {
-            match hklm.open_subkey_with_flags(
-                r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths",
-                KEY_WRITE,
-            ) {
-                Ok(app_paths) => match app_paths.delete_subkey_all(subkey) {
-                    Ok(()) => cleaned += 1,
-                    Err(_) => failed += 1,
-                },
-                Err(_) => failed += 1,
-            }
+            delete_subkey_in(&hklm, APP_PATHS, subkey)
         } else if let Some(val_name) = id.strip_prefix("SharedDLLs_") {
-            match hklm.open_subkey_with_flags(
-                r"SOFTWARE\Microsoft\Windows\CurrentVersion\SharedDLLs",
-                KEY_WRITE,
-            ) {
-                Ok(key) => match key.delete_value(val_name) {
-                    Ok(()) => cleaned += 1,
-                    Err(_) => failed += 1,
-                },
-                Err(_) => failed += 1,
-            }
+            delete_value_in(&hklm, SHARED_DLLS, val_name)
         } else if let Some(val_name) = id.strip_prefix("MuiCache_") {
-            match hkcu.open_subkey_with_flags(
-                r"Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache",
-                KEY_WRITE,
-            ) {
-                Ok(key) => match key.delete_value(val_name) {
-                    Ok(()) => cleaned += 1,
-                    Err(_) => failed += 1,
-                },
-                Err(_) => failed += 1,
-            }
+            delete_value_in(&hkcu, MUI_CACHE, val_name)
+        } else {
+            false
+        };
+
+        if ok {
+            cleaned += 1;
         } else {
             failed += 1;
         }
@@ -219,6 +233,28 @@ pub fn clean_registry_junk(item_ids: Vec<String>) -> Result<RegistryCleanResult,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_registry_path_expands_env_vars_and_quotes() {
+        unsafe { std::env::set_var("CTT_REG_ROOT", r"C:\Program Files\SampleApp") };
+        assert_eq!(
+            resolve_registry_file_path(r#""%CTT_REG_ROOT%\app.exe" --silent"#).as_deref(),
+            Some(r"C:\Program Files\SampleApp\app.exe")
+        );
+    }
+
+    #[test]
+    fn resolve_registry_path_ignores_relative_resource_and_unknown_env() {
+        assert_eq!(resolve_registry_file_path("notepad.exe"), None);
+        assert_eq!(
+            resolve_registry_file_path("@%SystemRoot%\\system32\\shell32.dll,-123"),
+            None
+        );
+        assert_eq!(
+            resolve_registry_file_path(r"%CTT_UNKNOWN_ENV_999%\app.exe"),
+            None
+        );
+    }
 
     #[test]
     fn cleaning_unknown_item_is_reported_as_failure_not_success() {

@@ -4,20 +4,19 @@ import {
   Zap,
   Plus,
   Trash2,
-  CheckCircle2,
-  AlertCircle,
   ToggleLeft,
   ToggleRight,
   Folder,
   Database,
 } from "lucide-react";
 import { StartupItem } from "../types";
+import { useFeedback } from "../hooks/useFeedback";
+import { FeedbackBanner } from "../components/FeedbackBanner";
 
 export const StartupTab: React.FC = () => {
   const [items, setItems] = useState<StartupItem[]>([]);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [isError, setIsError] = useState(false);
+  const { message, isError, notify: showMessage } = useFeedback(4000);
 
   // Add modal state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -39,12 +38,6 @@ export const StartupTab: React.FC = () => {
   useEffect(() => {
     loadItems();
   }, []);
-
-  const showMessage = (msg: string, err = false) => {
-    setMessage(msg);
-    setIsError(err);
-    setTimeout(() => setMessage(null), 4000);
-  };
 
   const handleToggle = async (item: StartupItem) => {
     try {
@@ -149,22 +142,7 @@ export const StartupTab: React.FC = () => {
       </div>
 
       {/* Message Banner */}
-      {message && (
-        <div
-          className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
-            isError
-              ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
-              : "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
-          }`}
-        >
-          {isError ? (
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          )}
-          <span>{message}</span>
-        </div>
-      )}
+      <FeedbackBanner message={message} isError={isError} />
 
       {/* Table Card */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">

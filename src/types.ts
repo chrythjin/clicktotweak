@@ -42,6 +42,7 @@ export interface ShellTweaksState {
   show_hidden_files: boolean;
   show_drive_letters_first: boolean;
   hide_shortcut_arrow: boolean;
+  animations_disabled: boolean;
   taskbar_search_mode: number;
   special_folders: SpecialFolderInfo[];
 }
@@ -70,6 +71,7 @@ export interface WindowInfo {
   process_name: string;
   is_topmost: boolean;
   is_visible: boolean;
+  alpha: number;
 }
 
 export interface GuardTarget {

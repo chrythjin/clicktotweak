@@ -1,3 +1,4 @@
+use crate::modules::common::hidden_command;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -44,28 +45,38 @@ fn is_adblock_active_at(path: &Path) -> bool {
 #[tauri::command(async)]
 pub fn get_network_summary() -> NetworkTrafficSummary {
     let mut networks = Networks::new_with_refreshed_list();
+    let started = std::time::Instant::now();
     std::thread::sleep(std::time::Duration::from_millis(200));
     networks.refresh(true);
+    let elapsed_secs = started.elapsed().as_secs_f64().max(0.05);
 
     let mut total_rx = 0u64;
     let mut total_tx = 0u64;
+    let mut best_traffic = 0u64;
     let mut active_iface = "None".to_string();
 
     for (interface_name, data) in &networks {
         let rx = data.received();
         let tx = data.transmitted();
-        if rx > 0 || tx > 0 {
-            total_rx += rx * 5; // 200ms -> per second
-            total_tx += tx * 5;
-            active_iface = interface_name.clone();
+        let sum = rx.saturating_add(tx);
+        if sum > 0 {
+            total_rx = total_rx.saturating_add(rx);
+            total_tx = total_tx.saturating_add(tx);
+            if sum > best_traffic {
+                best_traffic = sum;
+                active_iface = interface_name.clone();
+            }
         }
     }
+
+    let rx_per_sec = (total_rx as f64 / elapsed_secs).round() as u64;
+    let tx_per_sec = (total_tx as f64 / elapsed_secs).round() as u64;
 
     let is_adblock_active = is_adblock_active_at(Path::new(HOSTS_FILE_PATH));
 
     NetworkTrafficSummary {
-        total_rx_bytes_sec: total_rx,
-        total_tx_bytes_sec: total_tx,
+        total_rx_bytes_sec: rx_per_sec,
+        total_tx_bytes_sec: tx_per_sec,
         active_interface_name: active_iface,
         is_adblock_active,
         blocked_domains_count: if is_adblock_active {
@@ -117,6 +128,37 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
+const MAX_HOSTS_BACKUPS: usize = 3;
+
+fn prune_old_hosts_backups(dir: &Path, keep: usize) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut backups: Vec<(std::time::SystemTime, String, std::path::PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if !name.starts_with("hosts.clicktotweak.backup.") {
+                return None;
+            }
+            let modified = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            Some((modified, name, e.path()))
+        })
+        .collect();
+
+    if backups.len() <= keep {
+        return;
+    }
+
+    backups.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    for (_, _, old_path) in backups.into_iter().skip(keep) {
+        let _ = fs::remove_file(old_path);
+    }
+}
+
 fn write_hosts_atomically(path: &Path, content: &[u8]) -> Result<(), String> {
     use std::io::Write;
     let dir = path
@@ -164,6 +206,7 @@ fn write_hosts_atomically(path: &Path, content: &[u8]) -> Result<(), String> {
         }
         return Err(format!("{} (백업: {})", error, backup_path.display()));
     }
+    prune_old_hosts_backups(dir, MAX_HOSTS_BACKUPS);
     Ok(())
 }
 
@@ -210,8 +253,7 @@ fn toggle_adblock_at(path: &Path, enable: bool) -> Result<String, String> {
 
 #[tauri::command]
 pub fn flush_dns_cache() -> Result<String, String> {
-    use std::process::Command;
-    let output = Command::new("ipconfig")
+    let output = hidden_command("ipconfig")
         .arg("/flushdns")
         .output()
         .map_err(|e| format!("DNS 초기화 명령 실행 실패: {}", e))?;
@@ -418,5 +460,29 @@ mod tests {
         );
 
         fs::remove_dir_all(hosts.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn atomic_write_prunes_old_backups_beyond_retention_limit() {
+        let hosts = hosts_fixture("prune", b"v0\n");
+        let dir = hosts.parent().unwrap();
+
+        for i in 1..=5 {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            write_hosts_atomically(&hosts, format!("v{}\n", i).as_bytes()).unwrap();
+        }
+
+        let backups: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("hosts.clicktotweak.backup.")
+            })
+            .collect();
+        assert_eq!(backups.len(), MAX_HOSTS_BACKUPS);
+
+        fs::remove_dir_all(dir).unwrap();
     }
 }

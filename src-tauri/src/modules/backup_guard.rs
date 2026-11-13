@@ -1,8 +1,10 @@
+use crate::modules::common::app_data_subdir;
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GuardTarget {
@@ -32,15 +34,7 @@ thread_local! {
 }
 
 fn default_storage_dir() -> PathBuf {
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let p = PathBuf::from(local)
-            .join("ClickToTweakModern")
-            .join("GuardSnapshots");
-        let _ = fs::create_dir_all(&p);
-        p
-    } else {
-        PathBuf::from("./snapshots")
-    }
+    app_data_subdir("GuardSnapshots")
 }
 
 fn get_storage_dir() -> PathBuf {
@@ -62,13 +56,21 @@ fn refresh_target_capabilities(targets: &mut [GuardTarget]) {
     }
 }
 
-fn load_targets() -> Vec<GuardTarget> {
-    let mut targets: Vec<GuardTarget> = match fs::read_to_string(get_config_file()) {
-        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    };
+fn load_targets_checked() -> Result<Vec<GuardTarget>, String> {
+    let config_file = get_config_file();
+    if !config_file.exists() {
+        return Ok(Vec::new());
+    }
+    let data = fs::read_to_string(&config_file)
+        .map_err(|e| format!("보호 대상 설정 파일 읽기 실패: {}", e))?;
+    let mut targets: Vec<GuardTarget> = serde_json::from_str(&data)
+        .map_err(|e| format!("보호 대상 설정 파일(targets.json)이 손상되었습니다: {}", e))?;
     refresh_target_capabilities(&mut targets);
-    targets
+    Ok(targets)
+}
+
+fn load_targets() -> Vec<GuardTarget> {
+    load_targets_checked().unwrap_or_default()
 }
 
 fn save_targets(targets: &[GuardTarget]) -> Result<(), String> {
@@ -92,8 +94,10 @@ pub fn add_guard_target(path: String, name: String) -> Result<String, String> {
         return Err("현재는 파일만 보호 대상으로 등록할 수 있습니다.".to_string());
     }
 
-    let mut targets = load_targets();
-    let id = format!("guard_{}", Local::now().timestamp_millis());
+    let mut targets = load_targets_checked()?;
+    static TARGET_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = TARGET_SEQ.fetch_add(1, Ordering::Relaxed);
+    let id = format!("guard_{}_{}", Local::now().timestamp_millis(), seq);
     let display_name = if name.trim().is_empty() {
         p.file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -118,11 +122,25 @@ pub fn add_guard_target(path: String, name: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn remove_guard_target(id: String) -> Result<String, String> {
-    let mut targets = load_targets();
+    let mut targets = load_targets_checked()?;
     let orig_len = targets.len();
     targets.retain(|t| t.id != id);
     if targets.len() < orig_len {
         save_targets(&targets)?;
+        let prefix = format!("{}_", id);
+        if let Ok(entries) = fs::read_dir(get_storage_dir()) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_file()
+                    && path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.starts_with(&prefix))
+                {
+                    let _ = fs::remove_file(path);
+                }
+            }
+        }
         Ok("보호 대상 항목이 제거되었습니다.".to_string())
     } else {
         Err("대상을 찾을 수 없습니다.".to_string())
@@ -131,7 +149,7 @@ pub fn remove_guard_target(id: String) -> Result<String, String> {
 
 #[tauri::command]
 pub fn create_target_snapshot(id: String) -> Result<SnapshotInfo, String> {
-    let mut targets = load_targets();
+    let mut targets = load_targets_checked()?;
     let target_idx = targets
         .iter()
         .position(|t| t.id == id)
@@ -153,7 +171,11 @@ pub fn create_target_snapshot(id: String) -> Result<SnapshotInfo, String> {
 
     let storage = get_storage_dir();
     let now = Local::now();
-    let ts_str = now.format("%Y%m%d_%H%M%S").to_string();
+    let ts_str = format!(
+        "{}_{:03}",
+        now.format("%Y%m%d_%H%M%S"),
+        now.timestamp_subsec_millis()
+    );
     let snap_id = format!("{}_{}", target_id, ts_str);
 
     let dest_name = format!(
@@ -440,5 +462,36 @@ mod tests {
         .unwrap();
 
         assert_eq!(fs::read(&source).unwrap(), b"payload");
+    }
+
+    #[test]
+    fn corrupted_targets_json_blocks_mutations_instead_of_overwriting() {
+        let fixture = Fixture::new();
+        let source = fixture.dir.join("original.txt");
+        fs::write(&source, b"payload").unwrap();
+        fs::write(fixture.dir.join("targets.json"), b"{corrupted json").unwrap();
+
+        let err =
+            add_guard_target(source.to_string_lossy().to_string(), "test".to_string()).unwrap_err();
+        assert!(err.contains("손상되었습니다"));
+        assert_eq!(
+            fs::read_to_string(fixture.dir.join("targets.json")).unwrap(),
+            "{corrupted json"
+        );
+    }
+
+    #[test]
+    fn remove_guard_target_cleans_up_associated_snapshots() {
+        let fixture = Fixture::new();
+        let source = fixture.dir.join("original.txt");
+        fs::write(&source, b"payload").unwrap();
+        fixture.write_targets(&[legacy_target(&source)]);
+        let snapshot = create_target_snapshot("guard_test".to_string()).unwrap();
+        assert!(Path::new(&snapshot.snapshot_path).exists());
+
+        remove_guard_target("guard_test".to_string()).unwrap();
+
+        assert!(!Path::new(&snapshot.snapshot_path).exists());
+        assert!(get_guard_targets().is_empty());
     }
 }

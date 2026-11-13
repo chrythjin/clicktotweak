@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Sidebar } from "./components/Sidebar";
 import { Header } from "./components/Header";
@@ -18,13 +18,18 @@ import "./App.css";
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<TabKey>("dashboard");
   const [summary, setSummary] = useState<SystemSummary | null>(null);
+  const fetchingRef = useRef(false);
 
   const fetchSummary = async () => {
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
     try {
       const data = await invoke<SystemSummary>("get_system_summary");
       setSummary(data);
     } catch (err) {
       console.error("시스템 요약 로드 실패:", err);
+    } finally {
+      fetchingRef.current = false;
     }
   };
 

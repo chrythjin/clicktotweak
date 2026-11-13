@@ -1,3 +1,4 @@
+use crate::modules::common::{app_data_subdir, notify_shell_change, validate_safe_id};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -22,15 +23,7 @@ pub struct StoredRegValue {
 }
 
 fn get_storage_dir() -> PathBuf {
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let p = PathBuf::from(local)
-            .join("ClickToTweakModern")
-            .join("DesktopIcons");
-        let _ = fs::create_dir_all(&p);
-        p
-    } else {
-        PathBuf::from("./desktop_icons")
-    }
+    app_data_subdir("DesktopIcons")
 }
 
 const REG_BAGS_DESKTOP: &str = r"Software\Microsoft\Windows\Shell\Bags\1\Desktop";
@@ -40,14 +33,7 @@ fn is_managed_value(name: &str) -> bool {
 }
 
 fn validate_snapshot_id(id: &str) -> Result<(), String> {
-    if id.is_empty()
-        || !id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-    {
-        return Err("유효하지 않은 스냅샷 식별자입니다.".to_string());
-    }
-    Ok(())
+    validate_safe_id(id).map_err(|_| "유효하지 않은 스냅샷 식별자입니다.".to_string())
 }
 
 fn reg_type_from_u32(value: u32) -> Result<RegType, String> {
@@ -160,7 +146,7 @@ pub fn backup_desktop_icon_layout(name: String) -> Result<DesktopLayoutSnapshot,
     let dir = get_storage_dir();
     let file_path = dir.join(format!("{}.json", id));
     let serialized = serde_json::to_string_pretty(&values_dump).map_err(|e| e.to_string())?;
-    fs::write(file_path, serialized).map_err(|e| e.to_string())?;
+    fs::write(&file_path, serialized).map_err(|e| e.to_string())?;
 
     // Also record metadata
     let snapshot = DesktopLayoutSnapshot {
@@ -172,7 +158,10 @@ pub fn backup_desktop_icon_layout(name: String) -> Result<DesktopLayoutSnapshot,
 
     let meta_path = dir.join(format!("{}.meta.json", snapshot.id));
     let meta_str = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
-    let _ = fs::write(meta_path, meta_str);
+    if let Err(e) = fs::write(&meta_path, meta_str) {
+        let _ = fs::remove_file(&file_path);
+        return Err(format!("메타데이터 저장 실패: {}", e));
+    }
 
     Ok(snapshot)
 }
@@ -244,11 +233,7 @@ pub fn restore_desktop_icon_layout(id: String) -> Result<String, String> {
         }
     }
 
-    #[cfg(windows)]
-    unsafe {
-        use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
-    }
+    notify_shell_change();
 
     if !failed.is_empty() {
         return Err(format!(

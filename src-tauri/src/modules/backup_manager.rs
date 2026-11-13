@@ -1,7 +1,8 @@
+use crate::modules::common::{app_data_subdir, validate_safe_id};
 use crate::modules::shell_tweaks::{
-    ShellTweaksState, apply_special_folder_path, get_shell_tweaks_state, set_hide_shortcut_arrow,
-    set_show_drive_letters_first, set_show_file_extensions, set_show_hidden_files,
-    set_taskbar_search_mode, set_win11_classic_menu,
+    ShellTweaksState, apply_special_folder_path, get_shell_tweaks_state, set_animation_effects,
+    set_hide_shortcut_arrow, set_show_drive_letters_first, set_show_file_extensions,
+    set_show_hidden_files, set_taskbar_search_mode, set_win11_classic_menu,
 };
 use chrono::Local;
 use serde::{Deserialize, Serialize};
@@ -17,21 +18,17 @@ pub struct RestorePoint {
 }
 
 fn get_restore_dir() -> PathBuf {
-    if let Ok(local) = std::env::var("LOCALAPPDATA") {
-        let p = PathBuf::from(local)
-            .join("ClickToTweakModern")
-            .join("RestorePoints");
-        let _ = fs::create_dir_all(&p);
-        p
-    } else {
-        PathBuf::from("./restore_points")
-    }
+    app_data_subdir("RestorePoints")
 }
 
 #[tauri::command]
 pub fn create_restore_point(description: String) -> Result<RestorePoint, String> {
     let now = Local::now();
-    let id = format!("rp_{}", now.format("%Y%m%d_%H%M%S"));
+    let id = format!(
+        "rp_{}_{:03}",
+        now.format("%Y%m%d_%H%M%S"),
+        now.timestamp_subsec_millis()
+    );
     let created_at = now.format("%Y-%m-%d %H:%M:%S").to_string();
     let shell_state = get_shell_tweaks_state();
 
@@ -77,6 +74,7 @@ pub fn get_restore_points() -> Vec<RestorePoint> {
 
 #[tauri::command]
 pub fn restore_from_point(id: String) -> Result<String, String> {
+    validate_safe_id(&id)?;
     let dir = get_restore_dir();
     let file_path = dir.join(format!("{}.json", id));
 
@@ -117,6 +115,10 @@ pub fn restore_from_point(id: String) -> Result<String, String> {
         "작업표시줄 검색 모드",
         set_taskbar_search_mode(s.taskbar_search_mode),
     );
+    apply(
+        "창 최소화/최대화 애니메이션",
+        set_animation_effects(s.animations_disabled),
+    );
 
     for folder in &s.special_folders {
         apply(
@@ -150,5 +152,37 @@ pub fn restore_from_point(id: String) -> Result<String, String> {
             failed.len(),
             failed.join(" / ")
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_from_point_rejects_path_traversal_ids() {
+        assert!(restore_from_point("..\\secret".to_string()).is_err());
+        assert!(restore_from_point("sub/point".to_string()).is_err());
+        assert!(restore_from_point("".to_string()).is_err());
+    }
+
+    #[test]
+    fn legacy_restore_point_without_animations_field_deserializes() {
+        let legacy_json = r#"{
+            "id": "rp_20261112_120000",
+            "created_at": "2026-11-12 12:00:00",
+            "description": "legacy",
+            "shell_state": {
+                "win11_classic_menu": true,
+                "show_file_extensions": true,
+                "show_hidden_files": false,
+                "show_drive_letters_first": false,
+                "hide_shortcut_arrow": false,
+                "taskbar_search_mode": 1,
+                "special_folders": []
+            }
+        }"#;
+        let parsed: RestorePoint = serde_json::from_str(legacy_json).unwrap();
+        assert!(!parsed.shell_state.animations_disabled);
     }
 }

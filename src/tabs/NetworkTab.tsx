@@ -7,17 +7,17 @@ import {
   Shield,
   ToggleLeft,
   ToggleRight,
-  CheckCircle2,
-  AlertCircle,
   Radio,
 } from "lucide-react";
 import { NetworkTrafficSummary } from "../types";
+import { useFeedback } from "../hooks/useFeedback";
+import { FeedbackBanner } from "../components/FeedbackBanner";
+import { formatBandwidth } from "../lib/format";
 
 export const NetworkTab: React.FC = () => {
   const [summary, setSummary] = useState<NetworkTrafficSummary | null>(null);
   const [loading, setLoading] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [isError, setIsError] = useState(false);
+  const { message: feedback, isError, notify } = useFeedback(4000);
   const [flushingDns, setFlushingDns] = useState(false);
 
   const fetchTraffic = async () => {
@@ -34,12 +34,6 @@ export const NetworkTab: React.FC = () => {
     const timer = setInterval(fetchTraffic, 2000);
     return () => clearInterval(timer);
   }, []);
-
-  const notify = (msg: string, err = false) => {
-    setFeedback(msg);
-    setIsError(err);
-    setTimeout(() => setFeedback(null), 4000);
-  };
 
   const handleToggleAdblock = async () => {
     if (!summary) return;
@@ -68,14 +62,6 @@ export const NetworkTab: React.FC = () => {
     }
   };
 
-  const formatBandwidth = (bytesSec: number) => {
-    if (bytesSec < 1024) return `${bytesSec} B/s`;
-    const kb = bytesSec / 1024;
-    if (kb < 1024) return `${kb.toFixed(1)} KB/s`;
-    const mb = kb / 1024;
-    return `${mb.toFixed(2)} MB/s`;
-  };
-
   return (
     <div className="space-y-6">
       {/* Top Banner */}
@@ -99,22 +85,7 @@ export const NetworkTab: React.FC = () => {
       </div>
 
       {/* Feedback Banner */}
-      {feedback && (
-        <div
-          className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
-            isError
-              ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
-              : "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
-          }`}
-        >
-          {isError ? (
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          )}
-          <span>{feedback}</span>
-        </div>
-      )}
+      <FeedbackBanner message={feedback} isError={isError} />
 
       {/* Traffic Meter Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

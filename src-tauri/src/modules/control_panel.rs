@@ -1,3 +1,4 @@
+use crate::modules::common::{hidden_command, notify_shell_change};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use winreg::RegKey;
@@ -48,14 +49,6 @@ const CLSID_USER_FILES: &str = "{59031a47-072d-4514-9c55-08035c777b45}";
 const CLSID_CONTROL_PANEL: &str = "{5399E694-6CE5-4D6C-8FCE-1D8870FDCBA0}";
 const CLSID_NETWORK: &str = "{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}";
 const CLSID_RECYCLE_BIN: &str = "{645FF040-5081-101B-9F08-00AA002F954E}";
-
-fn notify_shell_change() {
-    #[cfg(windows)]
-    unsafe {
-        use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
-    }
-}
 
 // ==========================================
 // 1. 바탕화면 시스템 아이콘 제어
@@ -160,6 +153,15 @@ pub fn get_input_response_settings() -> Result<InputResponseSettings, String> {
 
 #[tauri::command]
 pub fn set_input_response_settings(settings: InputResponseSettings) -> Result<String, String> {
+    if settings.keyboard_delay > 3 {
+        return Err("키보드 반복 지연 시간은 0~3 범위여야 합니다.".to_string());
+    }
+    if settings.keyboard_speed > 31 {
+        return Err("키보드 반복 속도는 0~31 범위여야 합니다.".to_string());
+    }
+    if settings.menu_show_delay > 4000 {
+        return Err("메뉴 팝업 지연 시간은 0~4000ms 범위여야 합니다.".to_string());
+    }
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let mut failures: Vec<String> = Vec::new();
 
@@ -277,7 +279,7 @@ pub fn get_system_power_settings() -> Result<SystemPowerSettings, String> {
 #[tauri::command]
 pub fn set_hibernate_enabled(enable: bool) -> Result<String, String> {
     let arg = if enable { "/h on" } else { "/h off" };
-    let output = Command::new("powercfg")
+    let output = hidden_command("powercfg")
         .args(arg.split_whitespace())
         .output()
         .map_err(|e| format!("powercfg 실행 실패: {}", e))?;
@@ -300,9 +302,17 @@ pub fn set_hibernate_enabled(enable: bool) -> Result<String, String> {
 
 #[tauri::command]
 pub fn unlock_ultimate_performance() -> Result<String, String> {
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    if is_ultimate_performance_available(&hklm) {
+        return Ok(
+            "Windows '최고의 성능(Ultimate Performance)' 전원 계획이 이미 잠금 해제되어 있습니다."
+                .to_string(),
+        );
+    }
+
     // Ultimate Performance GUID
-    let output = Command::new("powercfg")
-        .args(["-duplicatescheme", "e9a42b02-d5df-448d-aa00-03f14749eb61"])
+    let output = hidden_command("powercfg")
+        .args(["-duplicatescheme", ULTIMATE_PERFORMANCE_GUID])
         .output()
         .map_err(|e| format!("powercfg 실행 실패: {}", e))?;
 
@@ -360,6 +370,9 @@ pub fn set_taskbar_setting(key: String, value: u32) -> Result<String, String> {
 
     match key.as_str() {
         "searchbox_mode" => {
+            if value > 3 {
+                return Err("검색 상자 모드는 0~3 범위여야 합니다.".to_string());
+            }
             let (k, _) = hkcu
                 .create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Search")
                 .map_err(|e| e.to_string())?;
@@ -367,6 +380,9 @@ pub fn set_taskbar_setting(key: String, value: u32) -> Result<String, String> {
                 .map_err(|e| e.to_string())?;
         }
         "show_task_view" => {
+            if value > 1 {
+                return Err("작업 보기 표시 값은 0 또는 1이어야 합니다.".to_string());
+            }
             let (k, _) = hkcu
                 .create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced")
                 .map_err(|e| e.to_string())?;
@@ -374,6 +390,9 @@ pub fn set_taskbar_setting(key: String, value: u32) -> Result<String, String> {
                 .map_err(|e| e.to_string())?;
         }
         "show_widgets" => {
+            if value > 1 {
+                return Err("위젯 표시 값은 0 또는 1이어야 합니다.".to_string());
+            }
             let (k, _) = hkcu
                 .create_subkey(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced")
                 .map_err(|e| e.to_string())?;

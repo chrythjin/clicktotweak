@@ -81,11 +81,15 @@ fn overwrite_with_patterns(path: &Path, total_passes: u32) -> Result<(), String>
                 1 => &zero_buffer[..write_len],
                 2 => &ones_buffer[..write_len],
                 _ => {
-                    let seed = (p as u64)
+                    let mut state = (p as u64)
                         .wrapping_mul(6364136223846793005)
-                        .wrapping_add(remaining);
-                    for (i, b) in rand_buffer[..write_len].iter_mut().enumerate() {
-                        *b = ((seed.wrapping_add(i as u64)) & 0xFF) as u8;
+                        .wrapping_add(remaining)
+                        | 1;
+                    for b in rand_buffer[..write_len].iter_mut() {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        *b = ((state >> 32) ^ state) as u8;
                     }
                     &rand_buffer[..write_len]
                 }
@@ -96,7 +100,8 @@ fn overwrite_with_patterns(path: &Path, total_passes: u32) -> Result<(), String>
             remaining -= write_len as u64;
         }
 
-        file.flush().map_err(|e| format!("플러시 실패: {}", e))?;
+        file.sync_data()
+            .map_err(|e| format!("디스크 동기화 실패: {}", e))?;
     }
 
     Ok(())
@@ -206,5 +211,18 @@ mod tests {
         assert!(shred_file(dir.join("nope.txt").to_string_lossy().to_string(), 3).is_err());
 
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn overwrite_third_pass_uses_non_sequential_pseudorandom_bytes() {
+        let file = fixture("pass3.txt", &[0xAA; 64]);
+
+        overwrite_with_patterns(&file, 3).unwrap();
+
+        let content = fs::read(&file).unwrap();
+        assert_eq!(content.len(), 64);
+        assert!(content.windows(2).any(|w| w[1] != w[0].wrapping_add(1)));
+
+        fs::remove_dir_all(file.parent().unwrap()).unwrap();
     }
 }

@@ -1,3 +1,4 @@
+use crate::modules::common::validate_single_filename;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -363,7 +364,7 @@ pub fn toggle_startup_item(id: String, enable: bool) -> Result<String, String> {
                         warning = format!(" (작업 관리자 상태 동기화 실패: {})", e);
                     }
                 }
-                "HKLM Run 32비트" => {
+                "HKLM Run 32비트" | "HKLM Run (32비트)" => {
                     let (run_key, _) = hklm.create_subkey(REG_HKLM_RUN32).map_err(|e| {
                         format!("HKLM Run 32비트 열기 실패(관리자 권한 필요): {}", e)
                     })?;
@@ -426,6 +427,14 @@ pub fn toggle_startup_item(id: String, enable: bool) -> Result<String, String> {
     ))
 }
 
+fn delete_approval_state(hive: &RegKey, approved_path: &str, subkey: &str, name: &str) {
+    if let Ok(key) = hive.open_subkey(approved_path)
+        && let Ok(sub) = key.open_subkey_with_flags(subkey, KEY_WRITE)
+    {
+        let _ = sub.delete_value(name);
+    }
+}
+
 #[tauri::command]
 pub fn delete_startup_item(id: String) -> Result<String, String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
@@ -435,6 +444,7 @@ pub fn delete_startup_item(id: String) -> Result<String, String> {
             .open_subkey_with_flags(REG_HKCU_RUN, KEY_WRITE)
             .map_err(|e| format!("HKCU Run 열기 실패: {}", e))?;
         run_key.delete_value(name).map_err(|e| e.to_string())?;
+        delete_approval_state(&hkcu, REG_HKCU_APPROVED, "Run", name);
         Ok(format!("'{}' 항목이 삭제되었습니다.", name))
     } else if let Some(name) = id.strip_prefix("HKLM_RUN32_") {
         let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
@@ -442,6 +452,7 @@ pub fn delete_startup_item(id: String) -> Result<String, String> {
             .open_subkey_with_flags(REG_HKLM_RUN32, KEY_WRITE)
             .map_err(|e| format!("HKLM Run 32비트 열기 실패: {}", e))?;
         run_key.delete_value(name).map_err(|e| e.to_string())?;
+        delete_approval_state(&hklm, REG_HKLM_APPROVED, "Run32", name);
         Ok(format!("'{}' 항목이 삭제되었습니다.", name))
     } else if let Some(name) = id.strip_prefix("HKLM_RUN_") {
         let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
@@ -449,6 +460,7 @@ pub fn delete_startup_item(id: String) -> Result<String, String> {
             .open_subkey_with_flags(REG_HKLM_RUN, KEY_WRITE)
             .map_err(|e| format!("HKLM Run 열기 실패 (관리자 권한 필요): {}", e))?;
         run_key.delete_value(name).map_err(|e| e.to_string())?;
+        delete_approval_state(&hklm, REG_HKLM_APPROVED, "Run", name);
         Ok(format!("'{}' 항목이 삭제되었습니다.", name))
     } else if let Some(name) = id.strip_prefix("DISABLED_") {
         let dis_key = hkcu
@@ -457,6 +469,7 @@ pub fn delete_startup_item(id: String) -> Result<String, String> {
         dis_key.delete_value(name).map_err(|e| e.to_string())?;
         Ok(format!("비활성 항목 '{}'이 삭제되었습니다.", name))
     } else if let Some(name) = id.strip_prefix("FOLDER_USER_") {
+        validate_single_filename(name)?;
         let file_path = get_user_startup_dir().map(|d| d.join(name));
         if let Some(p) = file_path
             && p.exists()
@@ -466,6 +479,7 @@ pub fn delete_startup_item(id: String) -> Result<String, String> {
         }
         Err("파일을 찾을 수 없습니다.".to_string())
     } else if let Some(name) = id.strip_prefix("FOLDER_COMMON_") {
+        validate_single_filename(name)?;
         let file_path = get_common_startup_dir().map(|d| d.join(name));
         if let Some(p) = file_path
             && p.exists()
@@ -591,5 +605,11 @@ mod tests {
             stored.unwrap_or_default(),
             format!("{}|||{}", LOC_HKCU_RUN, command)
         );
+    }
+
+    #[test]
+    fn delete_folder_startup_item_rejects_path_traversal() {
+        assert!(delete_startup_item("FOLDER_USER_..\\evil.lnk".to_string()).is_err());
+        assert!(delete_startup_item("FOLDER_COMMON_sub/evil.lnk".to_string()).is_err());
     }
 }

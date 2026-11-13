@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatBandwidth,
   formatBytesAdaptive,
   formatGigabytes,
   formatUptime,
@@ -34,6 +35,22 @@ describe("formatGigabytes", () => {
     expect(formatGigabytes(15 * 1024 * 1024 * 1024)).toBe("15.0 GB");
     expect(formatGigabytes(1024 * 1024 * 1024)).toBe("1.0 GB");
     expect(formatGigabytes(0)).toBe("0.0 GB");
+  });
+});
+
+describe("formatBandwidth", () => {
+  it("renders zero, negative, and non-finite inputs as 0 B/s", () => {
+    expect(formatBandwidth(0)).toBe("0 B/s");
+    expect(formatBandwidth(-50)).toBe("0 B/s");
+    expect(formatBandwidth(Number.NaN)).toBe("0 B/s");
+    expect(formatBandwidth(Number.POSITIVE_INFINITY)).toBe("0 B/s");
+  });
+
+  it("scales across B/s, KB/s, MB/s, and GB/s", () => {
+    expect(formatBandwidth(512.4)).toBe("512 B/s");
+    expect(formatBandwidth(1536)).toBe("1.5 KB/s");
+    expect(formatBandwidth(5 * 1024 * 1024)).toBe("5.00 MB/s");
+    expect(formatBandwidth(2 * 1024 * 1024 * 1024)).toBe("2.00 GB/s");
   });
 });
 

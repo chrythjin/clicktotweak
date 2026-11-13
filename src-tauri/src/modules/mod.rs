@@ -2,6 +2,7 @@ pub mod auto_shutdown;
 pub mod backup_guard;
 pub mod backup_manager;
 pub mod cleaner;
+pub mod common;
 pub mod control_panel;
 pub mod desktop_icons;
 pub mod elevation;

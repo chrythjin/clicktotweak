@@ -5,12 +5,12 @@ import {
   Play,
   Square,
   Clock,
-  CheckCircle2,
-  AlertCircle,
   MousePointer,
   Keyboard,
 } from "lucide-react";
 import { MacroPreset } from "../types";
+import { useFeedback } from "../hooks/useFeedback";
+import { FeedbackBanner } from "../components/FeedbackBanner";
 
 interface MacroStatus {
   running: boolean;
@@ -22,8 +22,7 @@ export const MacroTab: React.FC = () => {
   const [selectedPresetId, setSelectedPresetId] = useState<string | null>(null);
   const [repeatCount, setRepeatCount] = useState<number>(10);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [isError, setIsError] = useState(false);
+  const { message: feedback, isError, notify } = useFeedback(4000);
 
   const loadPresets = async () => {
     try {
@@ -44,12 +43,6 @@ export const MacroTab: React.FC = () => {
       .then((status) => setIsPlaying(status.running))
       .catch((error: unknown) => notify(`매크로 상태 확인 실패: ${error}`, true));
   }, []);
-
-  const notify = (msg: string, err = false) => {
-    setFeedback(msg);
-    setIsError(err);
-    setTimeout(() => setFeedback(null), 4000);
-  };
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -121,22 +114,7 @@ export const MacroTab: React.FC = () => {
       </div>
 
       {/* Feedback Banner */}
-      {feedback && (
-        <div
-          className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
-            isError
-              ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
-              : "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
-          }`}
-        >
-          {isError ? (
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          )}
-          <span>{feedback}</span>
-        </div>
-      )}
+      <FeedbackBanner message={feedback} isError={isError} />
 
       {/* Main Grid: Presets (Left) + Player Controls (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -199,7 +177,19 @@ export const MacroTab: React.FC = () => {
                       {act.action_type === "click" && (
                         <span className="flex items-center gap-1 text-slate-300">
                           <MousePointer className="w-3.5 h-3.5 text-blue-400" />
-                          마우스 {act.button === "right" ? "우클릭" : "좌클릭"} (딜레이: {act.delay_ms}ms)
+                          마우스{" "}
+                          {act.button === "right"
+                            ? "우클릭"
+                            : act.button === "double"
+                              ? "더블클릭"
+                              : "좌클릭"}{" "}
+                          (딜레이: {act.delay_ms}ms)
+                        </span>
+                      )}
+                      {act.action_type === "move" && (
+                        <span className="flex items-center gap-1 text-slate-300">
+                          <MousePointer className="w-3.5 h-3.5 text-cyan-400" />
+                          커서 이동 ({act.x ?? 0}, {act.y ?? 0}) (딜레이: {act.delay_ms}ms)
                         </span>
                       )}
                       {act.action_type === "key" && (

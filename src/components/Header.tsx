@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
@@ -7,16 +7,13 @@ import {
   RefreshCw,
   Sparkles,
   CheckCircle2,
+  AlertCircle,
   ShieldAlert,
   ShieldCheck,
 } from "lucide-react";
 import { SystemSummary, TabKey } from "../types";
-
-interface ElevationStatus {
-  is_elevated: boolean;
-  user_name: string;
-  can_elevate: boolean;
-}
+import { useFeedback } from "../hooks/useFeedback";
+import { formatGigabytes } from "../lib/format";
 
 interface HeaderProps {
   currentTab: TabKey;
@@ -39,25 +36,32 @@ const tabTitles: Record<TabKey, { title: string; subtitle: string }> = {
 
 export const Header: React.FC<HeaderProps> = ({ currentTab, summary, onRefresh }) => {
   const [optimizing, setOptimizing] = useState(false);
-  const [notifyMsg, setNotifyMsg] = useState<string | null>(null);
-  const [elevation, setElevation] = useState<ElevationStatus | null>(null);
+  const { message: notifyMsg, isError: notifyError, notify } = useFeedback(4000);
+  const relaunchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const info = tabTitles[currentTab];
 
   useEffect(() => {
-    invoke<ElevationStatus>("get_elevation_status")
-      .then(setElevation)
-      .catch(() => setElevation(null));
+    return () => {
+      if (relaunchTimerRef.current) {
+        clearTimeout(relaunchTimerRef.current);
+      }
+    };
   }, []);
 
   const handleRelaunchAsAdmin = async () => {
     try {
       const res = await invoke<string>("relaunch_as_admin");
-      setNotifyMsg(res);
-      setTimeout(() => getCurrentWindow().close(), 800);
+      notify(res, false);
+      if (relaunchTimerRef.current) {
+        clearTimeout(relaunchTimerRef.current);
+      }
+      relaunchTimerRef.current = setTimeout(() => {
+        relaunchTimerRef.current = null;
+        getCurrentWindow().close();
+      }, 800);
     } catch (err: any) {
-      setNotifyMsg(`관리자 권한 승인을 요청하지 못했습니다: ${err}`);
-      setTimeout(() => setNotifyMsg(null), 4000);
+      notify(`관리자 권한 승인을 요청하지 못했습니다: ${err}`, true);
     }
   };
 
@@ -65,19 +69,18 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, summary, onRefresh }
     try {
       setOptimizing(true);
       const res = await invoke<string>("optimize_memory");
-      setNotifyMsg(res);
+      notify(res, false);
       onRefresh();
-      setTimeout(() => setNotifyMsg(null), 4000);
     } catch (err: any) {
-      setNotifyMsg(`최적화 실패: ${err}`);
-      setTimeout(() => setNotifyMsg(null), 4000);
+      notify(`최적화 실패: ${err}`, true);
     } finally {
       setOptimizing(false);
     }
   };
 
-  const ramUsedGb = summary ? (summary.used_memory / 1024 / 1024 / 1024).toFixed(1) : "0";
-  const ramTotalGb = summary ? (summary.total_memory / 1024 / 1024 / 1024).toFixed(1) : "0";
+  const ramUsedLabel = summary ? formatGigabytes(summary.used_memory) : "0.0 GB";
+  const ramTotalLabel = summary ? formatGigabytes(summary.total_memory) : "0.0 GB";
+  const isElevated = summary?.is_elevated ?? false;
 
   return (
     <header className="h-20 bg-slate-900/60 backdrop-blur border-b border-slate-800 px-6 flex items-center justify-between gap-4 shrink-0">
@@ -91,8 +94,18 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, summary, onRefresh }
       <div className="flex items-center gap-4 shrink-0">
         {/* Toast / Notification pill */}
         {notifyMsg && (
-          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs animate-fade-in">
-            <CheckCircle2 className="w-3.5 h-3.5" />
+          <div
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs animate-fade-in ${
+              notifyError
+                ? "bg-rose-500/20 text-rose-300 border-rose-500/30"
+                : "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+            }`}
+          >
+            {notifyError ? (
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+            )}
             <span>{notifyMsg}</span>
           </div>
         )}
@@ -112,14 +125,14 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, summary, onRefresh }
               <HardDrive className="w-3.5 h-3.5 text-cyan-400" />
               <span className="text-slate-400">RAM</span>
               <span className="font-semibold text-slate-200">
-                {ramUsedGb}/{ramTotalGb} GB ({summary.memory_percentage.toFixed(0)}%)
+                {ramUsedLabel}/{ramTotalLabel} ({summary.memory_percentage.toFixed(0)}%)
               </span>
             </div>
           </div>
         )}
 
         {/* Elevation badge / relaunch action */}
-        {elevation && !elevation.is_elevated && (
+        {summary && !isElevated && (
           <button
             onClick={handleRelaunchAsAdmin}
             title="관리자 권한이 필요한 기능(HKLM 레지스트리, hosts 차단, 시스템 임시 폴더 정리)을 사용하려면 클릭하세요."
@@ -129,7 +142,7 @@ export const Header: React.FC<HeaderProps> = ({ currentTab, summary, onRefresh }
             <span>관리자 권한 필요</span>
           </button>
         )}
-        {elevation?.is_elevated && (
+        {summary && isElevated && (
           <div
             title="관리자 권한으로 실행 중입니다."
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-xs font-semibold"

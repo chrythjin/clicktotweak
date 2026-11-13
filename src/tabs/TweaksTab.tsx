@@ -2,8 +2,6 @@ import React, { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Sliders,
-  CheckCircle2,
-  AlertCircle,
   RotateCw,
   FolderOpen,
   Sparkles,
@@ -20,15 +18,13 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { ShellTweaksState, DesktopLayoutSnapshot } from "../types";
+import { useFeedback } from "../hooks/useFeedback";
+import { FeedbackBanner } from "../components/FeedbackBanner";
 
 export const TweaksTab: React.FC = () => {
   const [tweaks, setTweaks] = useState<ShellTweaksState | null>(null);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [isError, setIsError] = useState(false);
+  const { message: feedback, isError, notify } = useFeedback(4000);
   const [restartingExplorer, setRestartingExplorer] = useState(false);
-
-  // Animation tweak state
-  const [animationsDisabled, setAnimationsDisabled] = useState(false);
 
   // DesktopFixer states
   const [desktopLayouts, setDesktopLayouts] = useState<DesktopLayoutSnapshot[]>([]);
@@ -64,12 +60,6 @@ export const TweaksTab: React.FC = () => {
     loadTweaks();
     loadLayouts();
   }, []);
-
-  const notify = (msg: string, err = false) => {
-    setFeedback(msg);
-    setIsError(err);
-    setTimeout(() => setFeedback(null), 4000);
-  };
 
   const handleToggleClassicMenu = async () => {
     if (!tweaks) return;
@@ -132,11 +122,12 @@ export const TweaksTab: React.FC = () => {
   };
 
   const handleToggleAnimations = async () => {
+    if (!tweaks) return;
     try {
-      const next = !animationsDisabled;
+      const next = !tweaks.animations_disabled;
       const res = await invoke<string>("set_animation_effects", { disable: next });
-      setAnimationsDisabled(next);
       notify(res, false);
+      loadTweaks();
     } catch (e: any) {
       notify(`애니메이션 설정 실패: ${e}`, true);
     }
@@ -250,7 +241,7 @@ export const TweaksTab: React.FC = () => {
     {
       title: "창 최소화/최대화 시각 애니메이션 끄기",
       desc: "불필요한 창 움직임 딜레이를 제거하여 창 전환 및 반응 속도를 즉각적으로 최적화합니다.",
-      active: animationsDisabled,
+      active: tweaks?.animations_disabled ?? false,
       toggle: handleToggleAnimations,
       icon: Zap,
       color: "text-rose-400",
@@ -278,22 +269,7 @@ export const TweaksTab: React.FC = () => {
       </div>
 
       {/* Feedback Banner */}
-      {feedback && (
-        <div
-          className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
-            isError
-              ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
-              : "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
-          }`}
-        >
-          {isError ? (
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          )}
-          <span>{feedback}</span>
-        </div>
-      )}
+      <FeedbackBanner message={feedback} isError={isError} />
 
       {/* Tweaks Cards Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -353,6 +329,7 @@ export const TweaksTab: React.FC = () => {
                 { mode: 0, label: "검색 아이콘 숨김" },
                 { mode: 1, label: "검색 아이콘만 표시" },
                 { mode: 2, label: "검색창 전체 표시" },
+                { mode: 3, label: "아이콘 및 레이블 표시" },
               ].map((opt) => (
                 <label
                   key={opt.mode}

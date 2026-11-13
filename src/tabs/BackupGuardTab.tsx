@@ -7,19 +7,19 @@ import {
   Camera,
   History,
   RotateCcw,
-  CheckCircle2,
   AlertCircle,
   FileText,
   Clock,
 } from "lucide-react";
 import { GuardTarget, SnapshotInfo } from "../types";
+import { useFeedback } from "../hooks/useFeedback";
+import { FeedbackBanner } from "../components/FeedbackBanner";
 
 export const BackupGuardTab: React.FC = () => {
   const [targets, setTargets] = useState<GuardTarget[]>([]);
   const [selectedTargetId, setSelectedTargetId] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<SnapshotInfo[]>([]);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [isError, setIsError] = useState(false);
+  const { message: feedback, isError, notify } = useFeedback(4000);
 
   // New target modal
   const [showAddModal, setShowAddModal] = useState(false);
@@ -51,12 +51,6 @@ export const BackupGuardTab: React.FC = () => {
   useEffect(() => {
     loadTargets();
   }, []);
-
-  const notify = (msg: string, err = false) => {
-    setFeedback(msg);
-    setIsError(err);
-    setTimeout(() => setFeedback(null), 4000);
-  };
 
   const handleCreateSnapshot = async (id: string) => {
     try {
@@ -144,22 +138,7 @@ export const BackupGuardTab: React.FC = () => {
       </div>
 
       {/* Feedback Banner */}
-      {feedback && (
-        <div
-          className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${
-            isError
-              ? "bg-rose-950/40 border-rose-500/40 text-rose-300"
-              : "bg-emerald-950/40 border-emerald-500/40 text-emerald-300"
-          }`}
-        >
-          {isError ? (
-            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          )}
-          <span>{feedback}</span>
-        </div>
-      )}
+      <FeedbackBanner message={feedback} isError={isError} />
 
       {/* Grid: Target List (Left) + Snapshots History (Right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

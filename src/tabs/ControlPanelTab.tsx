@@ -8,8 +8,6 @@ import {
   BatteryCharging,
   Layout,
   ExternalLink,
-  CheckCircle2,
-  AlertCircle,
   HardDrive,
   Cpu,
   Sparkles,
@@ -33,6 +31,8 @@ import {
   TaskbarSettings,
   AdvancedWin11Tweaks,
 } from "../types";
+import { useFeedback } from "../hooks/useFeedback";
+import { FeedbackBanner } from "../components/FeedbackBanner";
 
 export const ControlPanelTab: React.FC = () => {
   const [icons, setIcons] = useState<DesktopSystemIcons | null>(null);
@@ -47,14 +47,7 @@ export const ControlPanelTab: React.FC = () => {
   const [customMinutes, setCustomMinutes] = useState<string>("");
   const [shutdownScheduled, setShutdownScheduled] = useState<string | null>(null);
 
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [isError, setIsError] = useState(false);
-
-  const notify = (msg: string, err = false) => {
-    setFeedback(msg);
-    setIsError(err);
-    setTimeout(() => setFeedback(null), 4500);
-  };
+  const { message: feedback, isError, notify } = useFeedback(4500);
 
   const loadAll = async () => {
     try {
@@ -127,6 +120,8 @@ export const ControlPanelTab: React.FC = () => {
     try {
       const res = await invoke<string>("unlock_ultimate_performance");
       notify(res, false);
+      const pwr = await invoke<SystemPowerSettings>("get_system_power_settings");
+      setPowerSettings(pwr);
     } catch (e: any) {
       notify(`오류: ${e}`, true);
     }
@@ -172,8 +167,8 @@ export const ControlPanelTab: React.FC = () => {
   // 8. 예약 종료 스케줄 실행
   const handleScheduleShutdown = async () => {
     const mins = customMinutes ? parseInt(customMinutes, 10) : shutdownMinutes;
-    if (isNaN(mins) || mins <= 0) {
-      notify("예약 시간(분)을 올바르게 지정해주세요.", true);
+    if (isNaN(mins) || mins <= 0 || mins > 5_256_000) {
+      notify("예약 시간은 1분에서 5,256,000분(10년) 사이로 지정해주세요.", true);
       return;
     }
     try {
@@ -217,22 +212,7 @@ export const ControlPanelTab: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Toast Feedback */}
-      {feedback && (
-        <div
-          className={`p-4 rounded-xl border text-xs flex items-center gap-2 shadow-lg transition-all animate-fade-in ${
-            isError
-              ? "bg-red-950/80 border-red-500/50 text-red-200"
-              : "bg-blue-950/80 border-blue-500/50 text-blue-200"
-          }`}
-        >
-          {isError ? (
-            <AlertCircle className="w-4 h-4 text-red-400 shrink-0" />
-          ) : (
-            <CheckCircle2 className="w-4 h-4 text-blue-400 shrink-0" />
-          )}
-          <span className="font-medium">{feedback}</span>
-        </div>
-      )}
+      <FeedbackBanner message={feedback} isError={isError} />
 
       {/* Header Banner */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-sm">
@@ -327,6 +307,30 @@ export const ControlPanelTab: React.FC = () => {
                   onChange={(e) =>
                     setInputSettings((prev) =>
                       prev ? { ...prev, keyboard_delay: parseInt(e.target.value) } : null
+                    )
+                  }
+                  className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+
+              {/* Keyboard Repeat Speed */}
+              <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-3.5">
+                <div className="flex justify-between items-center mb-1.5">
+                  <span className="text-xs font-semibold text-slate-200">키보드 반복 속도</span>
+                  <span className="text-xs font-bold text-indigo-400">
+                    {inputSettings?.keyboard_speed === 31
+                      ? "31 (초고속)"
+                      : `${inputSettings?.keyboard_speed ?? 31}단계`}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="31"
+                  value={inputSettings?.keyboard_speed ?? 31}
+                  onChange={(e) =>
+                    setInputSettings((prev) =>
+                      prev ? { ...prev, keyboard_speed: parseInt(e.target.value) } : null
                     )
                   }
                   className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"
@@ -684,9 +688,14 @@ export const ControlPanelTab: React.FC = () => {
               </div>
               <button
                 onClick={handleUnlockUltimatePower}
-                className="py-1.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-sm transition"
+                disabled={powerSettings?.ultimate_performance_unlocked}
+                className={`py-1.5 px-3 rounded-lg text-xs font-semibold shadow-sm transition ${
+                  powerSettings?.ultimate_performance_unlocked
+                    ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 cursor-default"
+                    : "bg-blue-600 hover:bg-blue-500 text-white"
+                }`}
               >
-                플랜 활성화
+                {powerSettings?.ultimate_performance_unlocked ? "잠금 해제됨" : "플랜 활성화"}
               </button>
             </div>
           </div>

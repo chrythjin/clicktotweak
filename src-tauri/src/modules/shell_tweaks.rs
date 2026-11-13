@@ -1,3 +1,4 @@
+use crate::modules::common::{expand_env_vars, hidden_command, notify_shell_change};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,9 @@ pub struct ShellTweaksState {
     pub show_hidden_files: bool,
     pub show_drive_letters_first: bool,
     pub hide_shortcut_arrow: bool,
-    pub taskbar_search_mode: u32, // 0: hidden, 1: icon, 2: search box
+    #[serde(default)]
+    pub animations_disabled: bool,
+    pub taskbar_search_mode: u32, // 0: hidden, 1: icon, 2: search box, 3: icon + label
     pub special_folders: Vec<SpecialFolderInfo>,
 }
 
@@ -49,50 +52,6 @@ fn special_folder_display_name(key_name: &str) -> Option<&'static str> {
         .map(|(_, display)| *display)
 }
 
-fn expand_env_vars(input: &str) -> String {
-    let mut expanded = input.to_string();
-    for _ in 0..4 {
-        let mut changed = false;
-        let mut result = String::with_capacity(expanded.len());
-        let mut rest = expanded.as_str();
-        while let Some(start) = rest.find('%') {
-            result.push_str(&rest[..start]);
-            let after = &rest[start + 1..];
-            match after.find('%') {
-                Some(end) => {
-                    let name = &after[..end];
-                    if name.is_empty() {
-                        result.push('%');
-                    } else {
-                        match std::env::var(name.to_uppercase().as_str()) {
-                            Ok(value) => {
-                                result.push_str(&value);
-                                changed = true;
-                            }
-                            Err(_) => {
-                                result.push('%');
-                                result.push_str(name);
-                                result.push('%');
-                            }
-                        }
-                    }
-                    rest = &after[end + 1..];
-                }
-                None => {
-                    result.push_str(&rest[start..]);
-                    rest = "";
-                }
-            }
-        }
-        result.push_str(rest);
-        expanded = result;
-        if !changed {
-            break;
-        }
-    }
-    expanded
-}
-
 fn is_within(child: &Path, parent: &Path) -> bool {
     let child_parts = path_parts(child);
     let parent_parts = path_parts(parent);
@@ -124,7 +83,11 @@ fn unique_destination(dest_dir: &Path, name: &str) -> PathBuf {
             return candidate;
         }
     }
-    dest_dir.join(name)
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    dest_dir.join(format!("{} ({}){}", stem, nanos, ext))
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -132,6 +95,7 @@ struct MoveOutcome {
     moved: usize,
     renamed: usize,
     bytes: u64,
+    transferred: Vec<(PathBuf, PathBuf)>,
 }
 
 fn copy_dir_recursive(source: &Path, dest: &Path) -> Result<u64, String> {
@@ -222,6 +186,7 @@ fn move_directory_contents(source: &Path, dest: &Path) -> Result<MoveOutcome, St
         if renamed {
             outcome.renamed += 1;
         }
+        outcome.transferred.push((entry, target));
     }
     Ok(outcome)
 }
@@ -292,7 +257,14 @@ pub fn get_shell_tweaks_state() -> ShellTweaksState {
         false
     };
 
-    // 6. SearchboxTaskbarMode
+    // 6. MinAnimate (창 최소화/최대화 시각 애니메이션)
+    let animations_disabled = hkcu
+        .open_subkey(r"Control Panel\Desktop\WindowMetrics")
+        .ok()
+        .and_then(|k| k.get_value::<String, _>("MinAnimate").ok())
+        .is_some_and(|v| v.trim() == "0");
+
+    // 7. SearchboxTaskbarMode
     let taskbar_search_mode = if let Ok(srch) = hkcu.open_subkey(REG_SEARCH) {
         srch.get_value::<u32, _>("SearchboxTaskbarMode")
             .unwrap_or(1)
@@ -300,7 +272,7 @@ pub fn get_shell_tweaks_state() -> ShellTweaksState {
         1
     };
 
-    // 7. Special folders
+    // 8. Special folders
     let mut special_folders = Vec::new();
     if let Ok(folders) = hkcu.open_subkey(REG_USER_SHELL_FOLDERS) {
         for (k, d) in SPECIAL_FOLDER_KEYS {
@@ -320,6 +292,7 @@ pub fn get_shell_tweaks_state() -> ShellTweaksState {
         show_hidden_files,
         show_drive_letters_first,
         hide_shortcut_arrow,
+        animations_disabled,
         taskbar_search_mode,
         special_folders,
     }
@@ -336,7 +309,7 @@ pub fn set_win11_classic_menu(enable: bool) -> Result<String, String> {
             .map_err(|e| format!("레지스트리 생성 실패: {}", e))?;
         key.set_value("", &"")
             .map_err(|e| format!("값 설정 실패: {}", e))?;
-        notify_shell();
+        notify_shell_change();
         Ok("Windows 11 클래식 우클릭 메뉴가 활성화되었습니다. (탐색기 재시작 권장)".to_string())
     } else {
         match hkcu.delete_subkey_all(clsid_root) {
@@ -344,7 +317,7 @@ pub fn set_win11_classic_menu(enable: bool) -> Result<String, String> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(format!("클래식 우클릭 메뉴 제거 실패: {}", e)),
         }
-        notify_shell();
+        notify_shell_change();
         Ok("Windows 11 기본 우클릭 메뉴로 복원되었습니다. (탐색기 재시작 권장)".to_string())
     }
 }
@@ -357,7 +330,7 @@ pub fn set_show_file_extensions(show: bool) -> Result<String, String> {
     let val: u32 = if show { 0 } else { 1 };
     key.set_value("HideFileExt", &val)
         .map_err(|e| e.to_string())?;
-    notify_shell();
+    notify_shell_change();
     Ok(if show {
         "알려진 파일 확장자가 항상 표시되도록 설정되었습니다."
     } else {
@@ -374,7 +347,7 @@ pub fn set_show_hidden_files(show: bool) -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     let val: u32 = if show { 1 } else { 2 };
     key.set_value("Hidden", &val).map_err(|e| e.to_string())?;
-    notify_shell();
+    notify_shell_change();
     Ok(if show {
         "숨김 파일 및 폴더가 표시되도록 설정되었습니다."
     } else {
@@ -392,7 +365,7 @@ pub fn set_show_drive_letters_first(show: bool) -> Result<String, String> {
     let val: u32 = if show { 4 } else { 0 };
     key.set_value("ShowDriveLettersFirst", &val)
         .map_err(|e| e.to_string())?;
-    notify_shell();
+    notify_shell_change();
     Ok(if show {
         "내 PC에서 드라이브 문자가 이름보다 먼저 표시됩니다."
     } else {
@@ -403,11 +376,14 @@ pub fn set_show_drive_letters_first(show: bool) -> Result<String, String> {
 
 #[tauri::command]
 pub fn set_taskbar_search_mode(mode: u32) -> Result<String, String> {
+    if mode > 3 {
+        return Err("작업표시줄 검색 모드는 0~3 범위여야 합니다.".to_string());
+    }
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu.create_subkey(REG_SEARCH).map_err(|e| e.to_string())?;
     key.set_value("SearchboxTaskbarMode", &mode)
         .map_err(|e| e.to_string())?;
-    notify_shell();
+    notify_shell_change();
     Ok("작업표시줄 검색 모드가 변경되었습니다.".to_string())
 }
 
@@ -420,7 +396,7 @@ pub fn set_hide_shortcut_arrow(hide: bool) -> Result<String, String> {
             .map_err(|e| format!("관리자 권한이 필요합니다: {}", e))?;
         key.set_value("29", &r"%windir%\System32\shell32.dll,-50")
             .map_err(|e| format!("설정 실패: {}", e))?;
-        notify_shell();
+        notify_shell_change();
         Ok("바로가기 화살표 아이콘이 제거되었습니다. (탐색기 재시작 권장)".to_string())
     } else {
         if let Ok(key) = hklm.open_subkey_with_flags(REG_SHELL_ICONS, KEY_WRITE) {
@@ -430,7 +406,7 @@ pub fn set_hide_shortcut_arrow(hide: bool) -> Result<String, String> {
                 Err(e) => return Err(format!("바로가기 화살표 설정 제거 실패: {}", e)),
             }
         }
-        notify_shell();
+        notify_shell_change();
         Ok("바로가기 화살표 아이콘이 기본값으로 복원되었습니다.".to_string())
     }
 }
@@ -460,7 +436,7 @@ pub fn apply_special_folder_path(key_name: &str, new_path: &str) -> Result<Strin
         let _ = legacy.set_value(key_name, &target_raw);
     }
 
-    notify_shell();
+    notify_shell_change();
     Ok(format!(
         "'{}' 경로가 '{}'로 되돌려졌습니다.",
         display_name, target_raw
@@ -525,8 +501,10 @@ pub fn set_special_folder_path(key_name: String, new_path: String) -> Result<Str
     };
 
     if let Err(e) = folders.set_value(&key_name, &target_raw) {
-        if let Some(current_path) = &current {
-            let _ = move_directory_contents(&target, current_path);
+        for (orig, moved_to) in outcome.transferred.iter().rev() {
+            if moved_to.exists() {
+                let _ = move_entry(moved_to, orig);
+            }
         }
         return Err(format!("레지스트리 경로 변경 실패: {}", e));
     }
@@ -535,7 +513,7 @@ pub fn set_special_folder_path(key_name: String, new_path: String) -> Result<Str
         let _ = legacy.set_value(&key_name, &target_raw);
     }
 
-    notify_shell();
+    notify_shell_change();
     let mut message = format!(
         "'{}' 경로를 '{}'로 변경하고 {}개 항목({})을 이동했습니다.",
         display_name,
@@ -558,14 +536,14 @@ pub fn set_special_folder_path(key_name: String, new_path: String) -> Result<Str
 #[tauri::command]
 pub fn restart_explorer() -> Result<String, String> {
     // Kill explorer and restart
-    let _ = Command::new("taskkill")
+    let _ = hidden_command("taskkill")
         .args(["/F", "/IM", "explorer.exe"])
         .status();
 
     // Spawn explorer.exe
     let _ = Command::new("explorer.exe").spawn();
 
-    notify_shell();
+    notify_shell_change();
     Ok("Windows 탐색기(explorer.exe)가 재시작되었습니다.".to_string())
 }
 
@@ -580,21 +558,13 @@ pub fn set_animation_effects(disable: bool) -> Result<String, String> {
     key.set_value("MinAnimate", &val)
         .map_err(|e| e.to_string())?;
 
-    notify_shell();
+    notify_shell_change();
     Ok(if disable {
         "창 최소화/최대화 시각 애니메이션이 꺼져 반응 속도가 최적화되었습니다."
     } else {
         "창 최소화/최대화 시각 애니메이션이 복원되었습니다."
     }
     .to_string())
-}
-
-fn notify_shell() {
-    #[cfg(windows)]
-    unsafe {
-        use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
-        SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None);
-    }
 }
 
 #[cfg(test)]

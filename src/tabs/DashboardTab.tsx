@@ -8,11 +8,12 @@ import {
   HardDrive,
   Shield,
   FileCheck,
-  CheckCircle,
   ExternalLink,
 } from "lucide-react";
 import { SystemSummary, TabKey } from "../types";
 import { formatGigabytes, formatUptime } from "../lib/format";
+import { useFeedback } from "../hooks/useFeedback";
+import { FeedbackBanner } from "../components/FeedbackBanner";
 
 interface DashboardTabProps {
   summary: SystemSummary | null;
@@ -22,16 +23,15 @@ interface DashboardTabProps {
 
 export const DashboardTab: React.FC<DashboardTabProps> = ({ summary, onNavigateTab }) => {
   const [quickToggling, setQuickToggling] = useState(false);
-  const [feedback, setFeedback] = useState<string | null>(null);
+  const { message: feedback, isError, notify } = useFeedback(3000);
 
   const handleQuickClassicMenu = async () => {
     try {
       setQuickToggling(true);
       const res = await invoke<string>("set_win11_classic_menu", { enable: true });
-      setFeedback(res);
-      setTimeout(() => setFeedback(null), 3000);
+      notify(res, false);
     } catch (e: any) {
-      setFeedback(`오류: ${e}`);
+      notify(`오류: ${e}`, true);
     } finally {
       setQuickToggling(false);
     }
@@ -41,10 +41,9 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({ summary, onNavigateT
     try {
       setQuickToggling(true);
       const res = await invoke<string>("set_show_file_extensions", { show: true });
-      setFeedback(res);
-      setTimeout(() => setFeedback(null), 3000);
+      notify(res, false);
     } catch (e: any) {
-      setFeedback(`오류: ${e}`);
+      notify(`오류: ${e}`, true);
     } finally {
       setQuickToggling(false);
     }
@@ -53,12 +52,7 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({ summary, onNavigateT
   return (
     <div className="space-y-6">
       {/* Feedback Banner */}
-      {feedback && (
-        <div className="p-3 rounded-xl bg-blue-900/40 border border-blue-500/40 text-blue-300 text-xs flex items-center gap-2">
-          <CheckCircle className="w-4 h-4 text-blue-400 shrink-0" />
-          <span>{feedback}</span>
-        </div>
-      )}
+      <FeedbackBanner message={feedback} isError={isError} />
 
       {/* Row 1: System Specs & Live Load Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

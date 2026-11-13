@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+const MAX_MACRO_REPEATS: u32 = 10_000;
 
 static IS_PLAYING: AtomicBool = AtomicBool::new(false);
 static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -92,8 +94,67 @@ impl Drop for PlayingGuard {
     }
 }
 
+fn sleep_interruptible(delay_ms: u64) {
+    if delay_ms == 0 {
+        return;
+    }
+    let deadline = Instant::now() + Duration::from_millis(delay_ms);
+    while Instant::now() < deadline {
+        if STOP_REQUESTED.load(Ordering::SeqCst) {
+            break;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        thread::sleep(remaining.min(Duration::from_millis(50)));
+    }
+}
+
+#[cfg(windows)]
+unsafe fn send_mouse_click(button: &str) -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+        MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEINPUT, SendInput,
+    };
+
+    let (down_flag, up_flag) = if button == "right" {
+        (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
+    } else {
+        (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
+    };
+    let clicks = if button == "double" { 2 } else { 1 };
+
+    let make_input = |flags| INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx: 0,
+                dy: 0,
+                mouseData: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+
+    for _ in 0..clicks {
+        let inputs = [make_input(down_flag), make_input(up_flag)];
+        let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+        if sent as usize != inputs.len() {
+            return false;
+        }
+    }
+    true
+}
+
 #[tauri::command]
 pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String, String> {
+    if repeat_count > MAX_MACRO_REPEATS {
+        return Err(format!(
+            "반복 횟수는 최대 {}회까지만 지정할 수 있습니다.",
+            MAX_MACRO_REPEATS
+        ));
+    }
+
     if IS_PLAYING
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
@@ -133,49 +194,8 @@ pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String
                     "click" => {
                         #[cfg(windows)]
                         unsafe {
-                            use windows::Win32::UI::Input::KeyboardAndMouse::{
-                                INPUT, INPUT_0, INPUT_MOUSE, MOUSEEVENTF_LEFTDOWN,
-                                MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP,
-                                MOUSEINPUT, SendInput,
-                            };
-
                             let btn = action.button.as_deref().unwrap_or("left");
-                            let (down_flag, up_flag) = if btn == "right" {
-                                (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)
-                            } else {
-                                (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)
-                            };
-
-                            let inputs = [
-                                INPUT {
-                                    r#type: INPUT_MOUSE,
-                                    Anonymous: INPUT_0 {
-                                        mi: MOUSEINPUT {
-                                            dx: 0,
-                                            dy: 0,
-                                            mouseData: 0,
-                                            dwFlags: down_flag,
-                                            time: 0,
-                                            dwExtraInfo: 0,
-                                        },
-                                    },
-                                },
-                                INPUT {
-                                    r#type: INPUT_MOUSE,
-                                    Anonymous: INPUT_0 {
-                                        mi: MOUSEINPUT {
-                                            dx: 0,
-                                            dy: 0,
-                                            mouseData: 0,
-                                            dwFlags: up_flag,
-                                            time: 0,
-                                            dwExtraInfo: 0,
-                                        },
-                                    },
-                                },
-                            ];
-                            let sent = SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
-                            if sent as usize != inputs.len() {
+                            if !send_mouse_click(btn) {
                                 failed_inputs += 1;
                             }
                         }
@@ -250,9 +270,7 @@ pub fn play_macro(actions: Vec<MacroAction>, repeat_count: u32) -> Result<String
                     _ => {}
                 }
 
-                if action.delay_ms > 0 {
-                    thread::sleep(Duration::from_millis(action.delay_ms));
-                }
+                sleep_interruptible(action.delay_ms);
             }
         }
 
@@ -273,5 +291,16 @@ pub fn get_macro_status() -> MacroStatus {
     MacroStatus {
         running: IS_PLAYING.load(Ordering::SeqCst),
         failed_inputs: FAILED_INPUTS.load(Ordering::SeqCst),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_excessive_repeat_count() {
+        let err = play_macro(Vec::new(), MAX_MACRO_REPEATS + 1).unwrap_err();
+        assert!(err.contains("반복 횟수"));
     }
 }
